@@ -1,0 +1,16 @@
+[workspace]
+members = [
+  "crates/core",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+hex = "0.4.3"
+serde = "1.0.219"
+thiserror = "2.0.12"
+
+heimdall = { git = "https://github.com/Jon-Becker/heimdall-rs", branch = "main" }
