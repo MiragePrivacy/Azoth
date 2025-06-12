@@ -9,8 +9,16 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+heimdall = { git = "https://github.com/Jon-Becker/heimdall-rs", package = "heimdall-disassembler", tag = "0.8.8" }
 hex = "0.4.3"
 serde = "1.0.219"
 thiserror = "2.0.12"
+clap = { version = "4.5.40", features = ["derive"] }
+serde_json = "1.0.140"
+sha3 = "0.10.8"
+tempfile = "3.20.0"
+tokio = { version = "1.45.1", features = ["full"] }
+tiny-keccak = "2.0.2"
 
-heimdall = { git = "https://github.com/Jon-Becker/heimdall-rs", branch = "main" }
+# bytecloak
+bytecloak-core = { path = "crates/core" }
