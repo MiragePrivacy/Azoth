@@ -2,9 +2,9 @@ name: Typos
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 env:
   TERM: xterm-256color
