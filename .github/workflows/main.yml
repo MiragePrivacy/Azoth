@@ -28,6 +28,6 @@ jobs:
         run: cargo build --all --all-features --release
 
       - name: tests
-        uses: taiki-e/setup-nextest@v0.3
+      - uses: taiki-e/install-action@nextest
       - name: nextest run
         run: cargo nextest run --release --all --no-fail-fast
