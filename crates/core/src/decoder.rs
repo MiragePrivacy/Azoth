@@ -130,7 +130,8 @@ pub async fn decode_bytecode(
 
 /// Parses the assembly string into a vector of Instructions.
 ///
-/// Handles lines like "0x0003 PUSH1 0x60 # comment" and skips labels (e.g., "label_0000:") or blank lines.
+/// Handles lines like "0x0003 PUSH1 0x60 # comment" and skips labels (e.g., "label_0000:") or blank
+/// lines.
 fn parse_assembly(asm: &str) -> Result<Vec<Instruction>, DecodeError> {
     // Fail on empty assembly
     if asm.trim().is_empty() {
