@@ -96,7 +96,7 @@ pub fn locate_sections(
     // Pass A: Detect Auxdata (CBOR) from the end
     let auxdata = detect_auxdata(bytes);
     let aux_offset = auxdata.map(|(offset, _)| offset).unwrap_or(total_len);
-    println!("Auxdata offset: {}", aux_offset);
+    tracing::debug!("Auxdata offset: {}", aux_offset);
 
     // Pass B: Detect Padding before Auxdata
     let padding = detect_padding(instructions, aux_offset);
@@ -105,25 +105,28 @@ pub fn locate_sections(
     // Pass C: Detect Init -> Runtime split using dispatcher pattern
     let (init_end, runtime_start, runtime_len) =
         detect_init_runtime_split(instructions).unwrap_or((0, 0, aux_offset));
-    println!(
+    tracing::debug!(
         "Init end: {}, Runtime start: {}, Runtime len: {}",
-        init_end, runtime_start, runtime_len
+        init_end,
+        runtime_start,
+        runtime_len
     );
 
     // Clamp runtime_len to avoid exceeding aux_offset
     let mut runtime_len = runtime_len;
     if runtime_start + runtime_len > aux_offset {
         runtime_len = aux_offset.saturating_sub(runtime_start);
-        println!("Clamped runtime_len to {}", runtime_len);
+        tracing::debug!("Clamped runtime_len to {}", runtime_len);
     }
 
     // Pass D: Detect ConstructorArgs if applicable
     let constructor_args = detect_constructor_args(init_end, runtime_start, aux_offset);
     let has_constructor_args = constructor_args.is_some();
     if let Some((args_offset, args_len)) = constructor_args {
-        println!(
+        tracing::debug!(
             "ConstructorArgs detected: offset={}, len={}",
-            args_offset, args_len
+            args_offset,
+            args_len
         );
         sections.push(Section {
             kind: SectionKind::ConstructorArgs,
@@ -135,7 +138,7 @@ pub fn locate_sections(
     // Only push Padding if ConstructorArgs is not present
     if !has_constructor_args {
         if let Some((pad_offset, pad_len)) = padding {
-            println!("Padding detected: offset={}, len={}", pad_offset, pad_len);
+            tracing::debug!("Padding detected: offset={}, len={}", pad_offset, pad_len);
             sections.push(Section {
                 kind: SectionKind::Padding,
                 offset: pad_offset,
@@ -148,7 +151,7 @@ pub fn locate_sections(
     if init_end == 0 && runtime_start == 0 && aux_offset != 0 {
         // Fix: Skip Runtime if aux_offset=0
         let runtime_len = aux_offset;
-        println!("No dispatcher, full Runtime: len={}", runtime_len);
+        tracing::debug!("No dispatcher, full Runtime: len={}", runtime_len);
         sections.push(Section {
             kind: SectionKind::Runtime,
             offset: 0,
@@ -156,7 +159,7 @@ pub fn locate_sections(
         });
     } else {
         if init_end > 0 {
-            println!("Init section: offset=0, len={}", init_end);
+            tracing::debug!("Init section: offset=0, len={}", init_end);
             sections.push(Section {
                 kind: SectionKind::Init,
                 offset: 0,
@@ -164,9 +167,10 @@ pub fn locate_sections(
             });
         }
         if runtime_len > 0 {
-            println!(
+            tracing::debug!(
                 "Runtime section: offset={}, len={}",
-                runtime_start, runtime_len
+                runtime_start,
+                runtime_len
             );
             sections.push(Section {
                 kind: SectionKind::Runtime,
@@ -178,7 +182,7 @@ pub fn locate_sections(
 
     // Add Auxdata section if detected
     if let Some((offset, len)) = auxdata {
-        println!("Auxdata section: offset={}, len={}", offset, len);
+        tracing::debug!("Auxdata section: offset={}, len={}", offset, len);
         sections.push(Section {
             kind: SectionKind::Auxdata,
             offset,
@@ -188,34 +192,37 @@ pub fn locate_sections(
 
     // Ensure sections are non-overlapping and cover the entire range
     sections.sort_by_key(|s| s.offset);
-    println!("Sorted sections: {:?}", sections);
+    tracing::debug!("Sorted sections: {:?}", sections);
 
     let mut current_offset = 0;
     for section in sections.iter() {
-        println!(
+        tracing::debug!(
             "Checking section: kind={:?}, offset={}, len={}",
-            section.kind, section.offset, section.len
+            section.kind,
+            section.offset,
+            section.len
         );
         if section.offset < current_offset {
-            println!("Overlap detected at offset {}", section.offset);
+            tracing::debug!("Overlap detected at offset {}", section.offset);
             return Err(DetectError::Overlap(section.offset));
         }
         if section.offset > current_offset {
-            println!("Gap detected at offset {}", current_offset);
+            tracing::debug!("Gap detected at offset {}", current_offset);
             return Err(DetectError::Gap(current_offset));
         }
         current_offset = section.offset + section.len;
     }
 
     if current_offset != total_len {
-        println!(
+        tracing::debug!(
             "Gap at end: current_offset={}, total_len={}",
-            current_offset, total_len
+            current_offset,
+            total_len
         );
         return Err(DetectError::Gap(current_offset));
     }
 
-    println!("Sections validated: {:?}", sections);
+    tracing::debug!("Sections validated: {:?}", sections);
     Ok(sections)
 }
 
@@ -232,7 +239,7 @@ fn detect_auxdata(bytes: &[u8]) -> Option<(usize, usize)> {
     const MARKER: &[u8] = &[0xa1, 0x65, 0x62, 0x7a, 0x7a, 0x72]; // a165627a7a72
     let len = bytes.len();
     if len < MARKER.len() + 2 {
-        println!("Bytecode too short for auxdata: len={}", len);
+        tracing::debug!("Bytecode too short for auxdata: len={}", len);
         return None;
     }
 
@@ -240,7 +247,7 @@ fn detect_auxdata(bytes: &[u8]) -> Option<(usize, usize)> {
     let len_raw = u16::from_be_bytes([bytes[len - 2], bytes[len - 1]]) as usize;
     if len_raw > 0 && len_raw + 2 <= len && bytes[len - len_raw - 2..len - 2].starts_with(MARKER) {
         let off = len - len_raw - 2;
-        println!(
+        tracing::debug!(
             "Auxdata detected (canonical): offset={}, len={}",
             off,
             len_raw + 2
@@ -253,15 +260,16 @@ fn detect_auxdata(bytes: &[u8]) -> Option<(usize, usize)> {
     for off in (tail_start..=len - MARKER.len()).rev() {
         if bytes[off..off + MARKER.len()] == *MARKER {
             let aux_len = len - off;
-            println!(
+            tracing::debug!(
                 "Auxdata detected (fallback): offset={}, len={}",
-                off, aux_len
+                off,
+                aux_len
             );
             return Some((off, aux_len)); // Marker to EOF
         }
     }
 
-    println!("No auxdata marker found");
+    tracing::debug!("No auxdata marker found");
     None
 }
 
@@ -357,18 +365,21 @@ mod tests {
         let bytecode = "0xa165627a7a720000"; // Simplified Auxdata example
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        println!("Bytecode: {:?}", bytes);
-        println!("Instructions: {:?}", instructions);
-        println!("DecodeInfo: {:?}", info);
+        tracing::debug!("Bytecode: {:?}", bytes);
+        tracing::debug!("Instructions: {:?}", instructions);
+        tracing::debug!("DecodeInfo: {:?}", info);
 
         let result = locate_sections(&bytes, &instructions, &info);
         match result {
             Ok(sections) => {
-                println!("Detected sections: {:?}", sections);
+                tracing::debug!("Detected sections: {:?}", sections);
                 for (i, section) in sections.iter().enumerate() {
-                    println!(
+                    tracing::debug!(
                         "Section {}: kind={:?}, offset={}, len={}",
-                        i, section.kind, section.offset, section.len
+                        i,
+                        section.kind,
+                        section.offset,
+                        section.len
                     );
                 }
                 assert_eq!(sections.len(), 1, "Expected exactly one section");
@@ -379,7 +390,7 @@ mod tests {
                 );
             }
             Err(e) => {
-                println!("Error in locate_sections: {:?}", e);
+                tracing::debug!("Error in locate_sections: {:?}", e);
                 panic!("Unexpected error: {:?}", e);
             }
         }
@@ -407,12 +418,12 @@ mod tests {
                 len: 5,
             }, // Overlaps at 3
         ];
-        println!("Simulated sections: {:?}", simulated_sections);
+        tracing::debug!("Simulated sections: {:?}", simulated_sections);
 
         // Directly test overlap validation
         simulated_sections.sort_by_key(|s| s.offset);
         let result = validate_sections(&mut simulated_sections);
-        println!("Result from validate_sections: {:?}", result);
+        tracing::debug!("Result from validate_sections: {:?}", result);
         assert!(
             matches!(result, Err(DetectError::Overlap(3))),
             "Expected Overlap error at offset 3"
@@ -436,16 +447,19 @@ mod tests {
 
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        println!("Full deploy bytecode: {:?}", bytes);
-        println!("Instructions: {:?}", instructions);
-        println!("DecodeInfo: {:?}", info);
+        tracing::debug!("Full deploy bytecode: {:?}", bytes);
+        tracing::debug!("Instructions: {:?}", instructions);
+        tracing::debug!("DecodeInfo: {:?}", info);
 
         let sections = locate_sections(&bytes, &instructions, &info).unwrap();
-        println!("Detected sections: {:?}", sections);
+        tracing::debug!("Detected sections: {:?}", sections);
         for (i, section) in sections.iter().enumerate() {
-            println!(
+            tracing::debug!(
                 "Section {}: kind={:?}, offset={}, len={}",
-                i, section.kind, section.offset, section.len
+                i,
+                section.kind,
+                section.offset,
+                section.len
             );
         }
 

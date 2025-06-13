@@ -212,10 +212,10 @@ mod tests {
     #[tokio::test]
     async fn test_hex_roundtrip() {
         let (ins, info, asm) = decode_bytecode(BYTECODE, false).await.unwrap();
-        println!("\nRaw assembly:\n{}", asm);
-        println!("Parsed instructions:");
+        tracing::debug!("\nRaw assembly:\n{}", asm);
+        tracing::debug!("Parsed instructions:");
         for instr in &ins {
-            println!("{}", instr);
+            tracing::debug!("{}", instr);
         }
         assert_eq!(ins.len(), 5);
 
@@ -234,10 +234,10 @@ mod tests {
         let path = tmp.path().to_str().unwrap();
 
         let (ins_file, info_file, asm) = decode_bytecode(path, true).await.unwrap();
-        println!("\nRaw assembly from heimdall (file):\n{}", asm);
-        println!("Parsed instructions (file):");
+        tracing::debug!("\nRaw assembly from heimdall (file):\n{}", asm);
+        tracing::debug!("Parsed instructions (file):");
         for instr in &ins_file {
-            println!("{}", instr);
+            tracing::debug!("{}", instr);
         }
         let (ins_hex, info_hex, _) = decode_bytecode(BYTECODE, false).await.unwrap();
 
@@ -264,7 +264,7 @@ mod tests {
             .map_err(|e| DecodeError::Heimdall(e.to_string()));
         match asm {
             Ok(asm) => {
-                println!("\nRaw assembly from invalid input:\n{}", asm);
+                tracing::debug!("\nRaw assembly from invalid input:\n{}", asm);
                 let result = parse_assembly(&asm);
                 assert!(matches!(result, Err(DecodeError::Parse { .. })));
             }
