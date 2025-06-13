@@ -6,14 +6,28 @@ on:
     branches: [master]
 
 jobs:
-  check:
-    name: Check
+  ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Format
+        with:
+          cache-all-crates: true
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+
+      - name: rustfmt
         run: cargo fmt --check
-      - name: Clippy
+
+      - name: clippy
         run: cargo clippy --all -- -D warnings
+
+      - name: build
+        run: cargo build --all --all-features --release
+
+      - name: tests
+        uses: taiki-e/setup-nextest@v0.3
+      - name: nextest run
+        run: cargo nextest run --release --all --no-fail-fast

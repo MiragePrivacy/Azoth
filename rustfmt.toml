@@ -1,1 +1,5 @@
 edition = "2024"
+format_code_in_doc_comments = true
+max_width = 100
+wrap_comments = true
+comment_width = 100
