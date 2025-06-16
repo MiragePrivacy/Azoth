@@ -208,6 +208,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_round_trip() {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
         // Fixture: Init (6 bytes) + Runtime (2 bytes) + Auxdata (6 bytes)
         let bytecode = hex::decode("600a600e600039600af3deadbeef6001a165627a7a72").unwrap();
         let (instructions, info, _) =
@@ -230,6 +233,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_runtime_only() {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
         // Fixture: Runtime-only bytecode (2 bytes)
         let bytecode = hex::decode("6001").unwrap();
         let (instructions, info, _) =

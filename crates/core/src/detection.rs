@@ -362,6 +362,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_locate_sections_with_auxdata() {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
         let bytecode = "0xa165627a7a720000"; // Simplified Auxdata example
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
@@ -398,6 +401,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_overlap_error() {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
         let _bytes = vec![0; 10];
         let _instructions: Vec<Instruction> = vec![]; // Explicit type annotation
         let _info = DecodeInfo {
@@ -432,6 +438,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_full_deploy_payload() {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
         let bytecode = concat!(
             "0x",
             "600a",             // PUSH1 0x0a (runtime len)

@@ -6,7 +6,7 @@ use thiserror::Error;
 use tiny_keccak::{Hasher, Keccak};
 
 /// Represents a single disassembled instruction.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Instruction {
     /// the instruction’s program counter (in bytes)
     pub pc: usize,
