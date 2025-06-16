@@ -12,9 +12,7 @@ The project therefore unfolds in **three simple stages**:
 | Obfuscation Passes        | Apply reversible transforms that raise analyst effort while bounding gas overhead. | Control‑flow flattening. Opaque predicates. Data/constant encoders. Layout shufflers                              |
 | Re‑assembly & Validation  | Splice removed segments back, emit final artefact, run differential tests.         | Byte‑perfect re‑assembler. Dynamic equivalence harness (REVM). Gas/size delta report                              |
 
----
-
-### Current milestone: **Stage 1**
+### overview
 
 ```
 crates/
@@ -24,16 +22,3 @@ crates/
  ├─ cli/        # `bytecloak` binary
  └─ utils/      # tracing, error, hex helpers
 ```
-
-Implemented so far:
-
-🔍 Detection — splits Init, Args, Runtime, Auxdata (CBOR)
-
-✂️ Strip — extracts the runtime blob, stores precise removal map, guarantees round‑trip.
-
-Next up:
-- [ ] **SSA IR** + CFG dominance.
-
-- [ ] CLI commands: `bytecloak disasm|strip|cfg|metrics`.
-
-- [ ] Docs: architecture.md
