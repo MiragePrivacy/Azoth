@@ -15,10 +15,11 @@
 /// assert!(!sections.is_empty());
 /// ```
 use crate::decoder::{DecodeInfo, Instruction};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Represents the type of a bytecode section.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SectionKind {
     /// Deployment code executed once during contract creation.
     Init,

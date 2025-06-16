@@ -15,18 +15,19 @@
 /// assert_eq!(bytes, rebuilt);
 /// ```
 use crate::detection::{Section, SectionKind};
+use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use thiserror::Error;
 
 /// Represents a runtime section with its original offset and length.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeSpan {
     pub offset: usize,
     pub len: usize,
 }
 
 /// Represents a removed section with its original data.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Removed {
     pub offset: usize,
     pub kind: SectionKind,
@@ -34,7 +35,7 @@ pub struct Removed {
 }
 
 /// Report detailing the stripping process and enabling reassembly.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CleanReport {
     /// Layout of runtime spans with their original offsets and lengths.
     pub runtime_layout: Vec<RuntimeSpan>,
