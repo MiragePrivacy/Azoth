@@ -2,10 +2,10 @@
 /// in Static Single Assignment (SSA) form for EVM bytecode analysis.
 ///
 /// This module implements the fourth step of the preprocessing pipeline, building a CFG from
-/// decoded instructions, assigning SSA values to stack operations, computing dominators and
-/// post-dominators, and bundling the results into a `CfgIrBundle` for integration into
-/// `AnalysisBundle`. It leverages `petgraph` for graph algorithms and traces execution with
-/// `tracing`.
+/// decoded instructions, assigning SSA values to stack operations, and bundling the results
+/// into a `CfgIrBundle` for integration into `AnalysisBundle`. Dominator and post-dominator
+/// analysis is handled in the `bytecloak-analysis` crate to separate data construction from
+/// interpretation.
 ///
 /// # Usage
 /// ```rust,ignore
@@ -15,13 +15,11 @@
 ///     detection::locate_sections(&bytes, &instructions, &info)
 ///         .unwrap();
 /// let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes).unwrap();
-/// // Integrate cfg_ir into AnalysisBundle (to be defined)
+/// // Integrate cfg_ir into AnalysisBundle or use with analysis::metrics
 /// ```
 use crate::decoder::Instruction;
 use crate::detection::Section;
-use petgraph::algo::dominators::simple_fast;
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::Reversed;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
@@ -74,18 +72,18 @@ pub enum EdgeType {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValueId(usize);
 
+/// Bundle of CFG and associated metadata for analysis.
+///
+/// Contains the control flow graph and a mapping of program counters to block indices
 #[derive(Debug, Clone)]
 pub struct CfgIrBundle {
     /// Graph representing the CFG with blocks as nodes and edges as control flow.
     pub cfg: DiGraph<Block, EdgeType>,
     /// Mapping of program counters to block indices.
     pub pc_to_block: HashMap<usize, NodeIndex>,
-    /// Dominator tree for the CFG.
-    pub dominators: HashMap<NodeIndex, NodeIndex>,
-    /// Post-dominator tree for the CFG.
-    pub post_dominators: HashMap<NodeIndex, NodeIndex>,
 }
 
+/// Error type for CFG and IR construction.
 #[derive(Debug, Error)]
 pub enum CfgIrError {
     #[error("no valid entry block found")]
@@ -97,6 +95,18 @@ pub enum CfgIrError {
 }
 
 /// Builds a CFG with IR in SSA form from decoded instructions and sections.
+///
+/// Constructs a control flow graph by splitting instructions into blocks, building edges based on
+/// control flow, and assigning SSA values to track stack operations. The resulting `CfgIrBundle`
+/// is used for further analysis, such as metrics computation in `bytecloak-analysis`.
+///
+/// # Arguments
+/// * `instructions` - Decoded EVM instructions from `decoder.rs`.
+/// * `sections` - Detected sections from `detection.rs`.
+/// * `bytecode` - Raw bytecode bytes.
+///
+/// # Returns
+/// A `CfgIrBundle` containing the CFG and PC-to-block mapping, or an error if construction fails.
 pub fn build_cfg_ir(
     instructions: &[Instruction],
     _sections: &[Section],
@@ -120,12 +130,8 @@ pub fn build_cfg_ir(
     tracing::debug!("Built CFG with {} nodes", cfg.node_count());
 
     // Step 3: Stack-SSA walk
-    let mut cfg_ir = assign_ssa_values(&mut cfg, &pc_to_block, instructions)?;
+    let cfg_ir = assign_ssa_values(&mut cfg, &pc_to_block, instructions)?;
     tracing::debug!("Assigned SSA values and computed stack heights");
-
-    // Step 4: Dominators + post-dominators
-    compute_dominators(&mut cfg_ir, &cfg);
-    tracing::debug!("Computed dominators and post-dominators");
 
     debug_assert!(
         cfg.node_count() >= 2,
@@ -134,7 +140,19 @@ pub fn build_cfg_ir(
     Ok(cfg_ir)
 }
 
-/// Splits instructions into blocks at JUMPDEST or terminal opcodes.
+/// Splits instructions into blocks at JUMPDEST, terminal opcodes (STOP, RETURN, …), or a valid
+/// static PUSH-JUMP target.
+///
+/// Iterates through instructions to identify block boundaries based on control flow instructions
+/// and jump targets, creating `Block::Body` instances for each segment. Ensures blocks are
+/// non-empty and handles static jump targets correctly.
+///
+/// # Arguments
+/// * `instructions` - Decoded EVM instructions.
+/// * `bytecode` - Raw bytecode bytes for jump target validation.
+///
+/// # Returns
+/// A vector of `Block` instances, or an error if no blocks are created.
 fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Block>, CfgIrError> {
     let mut blocks = Vec::new();
     let mut cur_block = Block::Body {
@@ -327,6 +345,18 @@ type BuildEdgesResult = Result<
 >;
 
 /// Builds edges between blocks based on control flow.
+///
+/// Constructs edges for the CFG by analyzing instruction sequences and control flow instructions
+/// (JUMP, JUMPI, STOP, etc.). Connects blocks with appropriate edge types (Fallthrough, Jump,
+/// BranchTrue, BranchFalse) and maps program counters to block indices.
+///
+/// # Arguments
+/// * `blocks` - Vector of blocks from `split_blocks`.
+/// * `instructions` - Decoded EVM instructions.
+/// * `cfg` - The CFG graph to populate with nodes and edges.
+///
+/// # Returns
+/// A tuple of edge definitions and a PC-to-block mapping, or an error if edge construction fails.
 fn build_edges(
     blocks: &[Block],
     _instructions: &[Instruction],
@@ -444,14 +474,25 @@ fn build_edges(
 }
 
 /// Assigns SSA values and computes stack heights for each block.
+///
+/// Walks through each block’s instructions to assign SSA `ValueId`s for stack operations (e.g.,
+/// PUSH) and compute the maximum stack height. Updates the `max_stack` field in `Block::Body`
+/// instances and constructs the final `CfgIrBundle`.
+///
+/// # Arguments
+/// * `cfg` - The CFG graph with nodes populated.
+/// * `pc_to_block` - Mapping of program counters to block indices.
+/// * `instructions` - Decoded EVM instructions.
+///
+/// # Returns
+/// A `CfgIrBundle` with the updated CFG and PC-to-block mapping, or an error if SSA assignment
+/// fails.
 fn assign_ssa_values(
     cfg: &mut DiGraph<Block, EdgeType>,
     pc_to_block: &HashMap<usize, NodeIndex>,
     _instructions: &[Instruction],
 ) -> Result<CfgIrBundle, CfgIrError> {
     let mut value_id = 0;
-    let dominators = HashMap::new();
-    let post_dominators = HashMap::new();
 
     for node in cfg.node_indices() {
         let block = cfg.node_weight(node).unwrap();
@@ -492,59 +533,10 @@ fn assign_ssa_values(
     Ok(CfgIrBundle {
         cfg: cfg.clone(),
         pc_to_block: pc_to_block.clone(),
-        dominators,
-        post_dominators,
     })
 }
 
-/// Computes dominators and post-dominators for the CFG.
-fn compute_dominators(cfg_ir: &mut CfgIrBundle, cfg: &DiGraph<Block, EdgeType>) {
-    let entry = cfg
-        .node_indices()
-        .next()
-        .ok_or(CfgIrError::NoEntryBlock)
-        .expect("CFG should have at least one node");
-    let exit = cfg
-        .node_indices()
-        .next_back()
-        .ok_or(CfgIrError::NoExitBlock)
-        .expect("CFG should have at least one node");
-
-    let doms = simple_fast(cfg, entry);
-    for node in cfg.node_indices() {
-        if let Some(dominator) = doms.immediate_dominator(node) {
-            cfg_ir.dominators.insert(node, dominator);
-        }
-    }
-
-    let rev_view = Reversed(cfg);
-    let post_doms = simple_fast(rev_view, exit);
-    for node in cfg.node_indices() {
-        if let Some(post_dominator) = post_doms.immediate_dominator(node) {
-            cfg_ir.post_dominators.insert(node, post_dominator);
-        }
-    }
-}
-
-// Helper method to access max_stack
-impl CfgIrBundle {
-    pub fn max_stack_per_block(&self) -> HashMap<usize, usize> {
-        let mut map = HashMap::new();
-        for node in self.cfg.node_indices() {
-            if let Some(Block::Body {
-                start_pc,
-                max_stack,
-                ..
-            }) = self.cfg.node_weight(node)
-            {
-                map.insert(*start_pc, *max_stack);
-            }
-        }
-        map
-    }
-}
-
-// Helper to access start_pc for a block
+/// Helper to access start_pc for a block.
 impl Block {
     fn start_pc(&self) -> usize {
         match self {
@@ -574,7 +566,6 @@ mod tests {
         let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes).expect("CFG builder failed");
         assert_eq!(cfg_ir.cfg.node_count(), 4); // Entry, two blocks, Exit
         assert_eq!(cfg_ir.pc_to_block.len(), 2); // Two body blocks mapped
-        assert!(!cfg_ir.dominators.is_empty());
     }
 
     #[tokio::test]
@@ -605,7 +596,6 @@ mod tests {
         let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes).expect("CFG builder failed");
         assert_eq!(cfg_ir.cfg.node_count(), 4); // Entry, two blocks, Exit
         assert_eq!(cfg_ir.cfg.edge_count(), 2); // Entry->block1, BranchFalse
-        assert!(!cfg_ir.dominators.is_empty());
     }
 
     #[tokio::test]
@@ -621,15 +611,6 @@ mod tests {
         let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes).expect("CFG builder failed");
         assert_eq!(cfg_ir.cfg.node_count(), 4); // Entry, two blocks, Exit
         assert_eq!(cfg_ir.cfg.edge_count(), 3); // Entry->block0, block0->block2, block2->Exit
-        assert_eq!(
-            cfg_ir
-                .max_stack_per_block()
-                .values()
-                .next()
-                .copied()
-                .unwrap_or(0),
-            1
-        ); // Max stack is 1 due to PUSH1 in each block
     }
 
     #[tokio::test]

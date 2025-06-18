@@ -1,6 +1,7 @@
 use bytecloak_cli::commands::{Cmd, Command};
 use clap::Parser;
 
+// todo(g4titanx): add --seed flag to cli
 #[derive(Parser)]
 #[command(name = "bytecloak")]
 #[command(about = "Bytecloak: EVM bytecode obfuscator")]
