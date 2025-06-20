@@ -35,7 +35,7 @@ pub struct Removed {
 }
 
 /// Report detailing the stripping process and enabling reassembly.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CleanReport {
     /// Layout of runtime spans with their original offsets and lengths.
     pub runtime_layout: Vec<RuntimeSpan>,

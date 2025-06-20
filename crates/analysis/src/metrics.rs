@@ -247,7 +247,8 @@ mod tests {
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-        let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes).unwrap();
+        let cfg_ir =
+            cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
 
         let metrics = collect_metrics(&cfg_ir, &report).expect("Metrics computation failed");
         assert_eq!(metrics.byte_len, 6, "Byte length mismatch");
@@ -274,7 +275,8 @@ mod tests {
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-        let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes).unwrap();
+        let cfg_ir =
+            cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
 
         let metrics = collect_metrics(&cfg_ir, &report).expect("Metrics computation failed");
         assert_eq!(metrics.byte_len, 3, "Byte length mismatch");
@@ -298,7 +300,8 @@ mod tests {
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-        let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes).unwrap();
+        let cfg_ir =
+            cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
 
         let metrics = collect_metrics(&cfg_ir, &report).expect("Metrics computation failed");
         assert_eq!(metrics.byte_len, 8, "Byte length mismatch");
@@ -337,7 +340,8 @@ mod tests {
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-        let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes).unwrap();
+        let cfg_ir =
+            cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
 
         let m = collect_metrics(&cfg_ir, &report).expect("single STOP is still code");
         assert_eq!(m.block_cnt, 1, "Single STOP should form one body block");
@@ -356,7 +360,8 @@ mod tests {
         let bytes = hex::decode(bytecode_before.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-        let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes).unwrap();
+        let cfg_ir =
+            cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
         let metrics_before = collect_metrics(&cfg_ir, &report).unwrap();
 
         let bytecode_after = "0x600160015601"; // PUSH1 0x01, PUSH1 0x01, ADD
@@ -366,7 +371,8 @@ mod tests {
         let bytes = hex::decode(bytecode_after.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-        let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes).unwrap();
+        let cfg_ir =
+            cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
         let metrics_after = collect_metrics(&cfg_ir, &report).unwrap();
 
         let score = compare(&metrics_before, &metrics_after);
@@ -386,7 +392,8 @@ mod tests {
         let bytes = hex::decode(bytecode_simple.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-        let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes).unwrap();
+        let cfg_ir =
+            cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
         let metrics_simple = collect_metrics(&cfg_ir, &report).unwrap();
 
         let bytecode_complex = "0x6000600157600256"; // PUSH1 0x00, JUMPI, JUMPDEST, STOP
@@ -396,7 +403,8 @@ mod tests {
         let bytes = hex::decode(bytecode_complex.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-        let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes).unwrap();
+        let cfg_ir =
+            cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
         let metrics_complex = collect_metrics(&cfg_ir, &report).unwrap();
 
         assert!(
@@ -416,7 +424,8 @@ mod tests {
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-        let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes).unwrap();
+        let cfg_ir =
+            cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
 
         let (doms, post_doms) = dominator_pairs(&cfg_ir.cfg);
         let overlap = dom_overlap(&doms, &post_doms);

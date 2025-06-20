@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use bytecloak_core::cfg_ir::{Block, CfgIrBundle, EdgeType, build_cfg_ir};
 use bytecloak_core::decoder::decode_bytecode;
 use bytecloak_core::detection::locate_sections;
+use bytecloak_core::strip::strip_bytecode;
 use clap::Args;
 use hex::FromHex;
 use std::error::Error;
@@ -26,7 +27,8 @@ impl super::Command for CfgArgs {
 
         let (instructions, info, _) = decode_bytecode(input, is_file).await?;
         let sections = locate_sections(&bytes, &instructions, &info)?;
-        let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes)?;
+        let (_clean_runtime, clean_report) = strip_bytecode(&bytes, &sections)?;
+        let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes, clean_report)?;
 
         let dot = generate_dot(&cfg_ir);
         if let Some(out_path) = self.output {

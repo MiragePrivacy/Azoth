@@ -1,23 +1,6 @@
 /// Module for constructing a Control Flow Graph (CFG) with Intermediate Representation (IR)
 /// in Static Single Assignment (SSA) form for EVM bytecode analysis.
-///
-/// This module implements the fourth step of the preprocessing pipeline, building a CFG from
-/// decoded instructions, assigning SSA values to stack operations, and bundling the results
-/// into a `CfgIrBundle` for integration into `AnalysisBundle`. Dominator and post-dominator
-/// analysis is handled in the `bytecloak-analysis` crate to separate data construction from
-/// interpretation.
-///
-/// # Usage
-/// ```rust,ignore
-/// let (instructions, info, _) = decoder::decode_bytecode("0x60016002", false).await.unwrap();
-/// let bytes = hex::decode("60016002").unwrap();
-/// let sections =
-///     detection::locate_sections(&bytes, &instructions, &info)
-///         .unwrap();
-/// let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes).unwrap();
-/// // Integrate cfg_ir into AnalysisBundle or use with analysis::metrics
-/// ```
-use crate::decoder::Instruction;
+use crate::decoder::{DecodeError, Instruction};
 use crate::detection::Section;
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::{HashMap, HashSet};
@@ -81,6 +64,7 @@ pub struct CfgIrBundle {
     pub cfg: DiGraph<Block, EdgeType>,
     /// Mapping of program counters to block indices.
     pub pc_to_block: HashMap<usize, NodeIndex>,
+    pub clean_report: crate::strip::CleanReport,
 }
 
 /// Error type for CFG and IR construction.
@@ -92,6 +76,8 @@ pub enum CfgIrError {
     NoExitBlock,
     #[error("invalid instruction sequence")]
     InvalidSequence,
+    #[error("decoding error: {0}")]
+    DecodeError(#[from] DecodeError),
 }
 
 /// Builds a CFG with IR in SSA form from decoded instructions and sections.
@@ -111,6 +97,7 @@ pub fn build_cfg_ir(
     instructions: &[Instruction],
     _sections: &[Section],
     bytecode: &[u8],
+    clean_report: crate::strip::CleanReport,
 ) -> Result<CfgIrBundle, CfgIrError> {
     tracing::debug!(
         "Starting CFG-IR construction with {} instructions",
@@ -130,14 +117,42 @@ pub fn build_cfg_ir(
     tracing::debug!("Built CFG with {} nodes", cfg.node_count());
 
     // Step 3: Stack-SSA walk
-    let cfg_ir = assign_ssa_values(&mut cfg, &pc_to_block, instructions)?;
+    let report = clean_report;
+    assign_ssa_values(&mut cfg, &pc_to_block, instructions)?;
     tracing::debug!("Assigned SSA values and computed stack heights");
 
     debug_assert!(
         cfg.node_count() >= 2,
         "CFG must contain at least Entry and Exit"
     );
-    Ok(cfg_ir)
+    Ok(CfgIrBundle {
+        cfg,
+        pc_to_block,
+        clean_report: report,
+    })
+}
+
+impl CfgIrBundle {
+    /// Replaces the body of the CFG with new bytecode, rebuilding the CFG and PC mapping.
+    pub async fn replace_body(
+        &mut self,
+        new_bytecode: Vec<u8>,
+        sections: &[Section],
+    ) -> Result<(), CfgIrError> {
+        let (instructions, _, _) =
+            crate::decoder::decode_bytecode(&format!("0x{}", hex::encode(&new_bytecode)), false)
+                .await
+                .map_err(CfgIrError::DecodeError)?;
+
+        let clean_report = self.clean_report.clone();
+        let new_bundle = build_cfg_ir(&instructions, sections, &new_bytecode, clean_report)?;
+
+        self.cfg = new_bundle.cfg;
+        self.pc_to_block = new_bundle.pc_to_block;
+        self.clean_report = new_bundle.clean_report;
+
+        Ok(())
+    }
 }
 
 /// Splits instructions into blocks at JUMPDEST, terminal opcodes (STOP, RETURN, …), or a valid
@@ -489,9 +504,9 @@ fn build_edges(
 /// fails.
 fn assign_ssa_values(
     cfg: &mut DiGraph<Block, EdgeType>,
-    pc_to_block: &HashMap<usize, NodeIndex>,
+    _pc_to_block: &HashMap<usize, NodeIndex>,
     _instructions: &[Instruction],
-) -> Result<CfgIrBundle, CfgIrError> {
+) -> Result<(), CfgIrError> {
     let mut value_id = 0;
 
     for node in cfg.node_indices() {
@@ -530,10 +545,7 @@ fn assign_ssa_values(
         }
     }
 
-    Ok(CfgIrBundle {
-        cfg: cfg.clone(),
-        pc_to_block: pc_to_block.clone(),
-    })
+    Ok(())
 }
 
 /// Helper to access start_pc for a block.
@@ -549,7 +561,7 @@ impl Block {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{decoder, detection};
+    use crate::{decoder, detection, strip};
     use tokio;
     use tracing_subscriber;
 
@@ -562,8 +574,10 @@ mod tests {
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
 
-        let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes).expect("CFG builder failed");
+        let cfg_ir =
+            build_cfg_ir(&instructions, &sections, &bytes, report).expect("CFG builder failed");
         assert_eq!(cfg_ir.cfg.node_count(), 4); // Entry, two blocks, Exit
         assert_eq!(cfg_ir.pc_to_block.len(), 2); // Two body blocks mapped
     }
@@ -577,8 +591,10 @@ mod tests {
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
 
-        let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes).expect("CFG builder failed");
+        let cfg_ir =
+            build_cfg_ir(&instructions, &sections, &bytes, report).expect("CFG builder failed");
         assert_eq!(cfg_ir.cfg.node_count(), 3); // Entry, single block, Exit
         assert_eq!(cfg_ir.cfg.edge_count(), 2); // Entry->block, block->Exit
     }
@@ -592,8 +608,10 @@ mod tests {
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
 
-        let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes).expect("CFG builder failed");
+        let cfg_ir =
+            build_cfg_ir(&instructions, &sections, &bytes, report).expect("CFG builder failed");
         assert_eq!(cfg_ir.cfg.node_count(), 4); // Entry, two blocks, Exit
         assert_eq!(cfg_ir.cfg.edge_count(), 2); // Entry->block1, BranchFalse
     }
@@ -607,8 +625,10 @@ mod tests {
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
 
-        let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes).expect("CFG builder failed");
+        let cfg_ir =
+            build_cfg_ir(&instructions, &sections, &bytes, report).expect("CFG builder failed");
         assert_eq!(cfg_ir.cfg.node_count(), 4); // Entry, two blocks, Exit
         assert_eq!(cfg_ir.cfg.edge_count(), 3); // Entry->block0, block0->block2, block2->Exit
     }
@@ -622,8 +642,10 @@ mod tests {
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
         let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
 
-        let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes).expect("CFG builder succeeded");
+        let cfg_ir =
+            build_cfg_ir(&instructions, &sections, &bytes, report).expect("CFG builder succeeded");
         assert_eq!(cfg_ir.cfg.node_count(), 3); // Entry, lone block, Exit
     }
 }

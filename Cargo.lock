@@ -1123,7 +1123,6 @@ checksum = "7575182f7272186991736b70173b0ea045398f984bf5ebbb3804736ce1330c9d"
 name = "bytecloak-analysis"
 version = "0.1.0"
 dependencies = [
- "bytecloak-cli",
  "bytecloak-core",
  "hex",
  "petgraph",
@@ -1140,9 +1139,12 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytecloak-core",
+ "bytecloak-transform",
  "clap",
  "hex",
  "serde_json",
+ "tempfile",
+ "thiserror 2.0.12",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1160,6 +1162,24 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.12",
  "tiny-keccak",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "bytecloak-transform"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytecloak-analysis",
+ "bytecloak-core",
+ "hex",
+ "petgraph",
+ "rand 0.9.1",
+ "serde",
+ "sha3",
+ "thiserror 2.0.12",
  "tokio",
  "tracing",
  "tracing-subscriber",

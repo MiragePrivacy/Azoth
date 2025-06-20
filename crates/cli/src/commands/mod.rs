@@ -4,6 +4,7 @@ use std::error::Error;
 
 pub mod cfg;
 pub mod decode;
+pub mod obfuscate;
 pub mod strip;
 
 #[derive(Subcommand)]
@@ -16,6 +17,9 @@ pub enum Cmd {
 
     /// Write runtime CFG to stdout or a file
     Cfg(cfg::CfgArgs),
+
+    /// Obfuscate bytecode with specified transforms
+    Obfuscate(obfuscate::ObfuscateArgs),
 }
 
 #[async_trait]
@@ -30,6 +34,7 @@ impl Command for Cmd {
             Cmd::Decode(args) => args.execute(input).await,
             Cmd::Strip(args) => args.execute(input).await,
             Cmd::Cfg(args) => args.execute(input).await,
+            Cmd::Obfuscate(args) => args.execute(input).await,
         }
     }
 }
