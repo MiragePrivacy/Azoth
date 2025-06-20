@@ -1,4 +1,5 @@
 use crate::decoder::Instruction;
+use crate::opcode::Opcode;
 use crate::strip::CleanReport;
 use hex;
 use thiserror::Error;
@@ -16,71 +17,61 @@ pub enum EncodeError {
 pub fn encode(instructions: &[Instruction]) -> Result<Vec<u8>, EncodeError> {
     let mut bytes = Vec::with_capacity(instructions.len() * 3);
     for ins in instructions {
-        match ins.opcode.as_str() {
-            "PUSH1" => {
-                bytes.push(0x60);
-                if let Some(imm) = &ins.imm {
-                    let imm_bytes = hex::decode(imm)?;
-                    if imm_bytes.len() != 1 {
-                        return Err(EncodeError::InvalidImmediate(
-                            "PUSH1 requires 1-byte immediate".to_string(),
-                        ));
-                    }
-                    bytes.extend_from_slice(&imm_bytes);
-                } else {
-                    return Err(EncodeError::InvalidImmediate(
-                        "PUSH1 missing immediate".to_string(),
-                    ));
-                }
-            }
-            "PUSH2" => {
-                bytes.push(0x61);
-                if let Some(imm) = &ins.imm {
-                    let imm_bytes = hex::decode(imm)?;
-                    if imm_bytes.len() != 2 {
-                        return Err(EncodeError::InvalidImmediate(
-                            "PUSH2 requires 2-byte immediate".to_string(),
-                        ));
-                    }
-                    bytes.extend_from_slice(&imm_bytes);
-                } else {
-                    return Err(EncodeError::InvalidImmediate(
-                        "PUSH2 missing immediate".to_string(),
-                    ));
-                }
-            }
-            "PUSH32" => {
-                bytes.push(0x7f);
-                if let Some(imm) = &ins.imm {
-                    let imm_bytes = hex::decode(imm)?;
-                    if imm_bytes.len() != 32 {
-                        return Err(EncodeError::InvalidImmediate(
-                            "PUSH32 requires 32-byte immediate".to_string(),
-                        ));
-                    }
-                    bytes.extend_from_slice(&imm_bytes);
-                } else {
-                    return Err(EncodeError::InvalidImmediate(
-                        "PUSH32 missing immediate".to_string(),
-                    ));
-                }
-            }
-            "JUMPDEST" => bytes.push(0x5b),
-            "JUMP" => bytes.push(0x56),
-            "JUMPI" => bytes.push(0x57),
-            "STOP" => bytes.push(0x00),
-            "ADD" => bytes.push(0x01),
-            "POP" => bytes.push(0x50),
-            "EQ" => bytes.push(0x14),
-            "DUP1" => bytes.push(0x80),
-            "DUP2" => bytes.push(0x81),
-            "AND" => bytes.push(0x16),
-            "OR" => bytes.push(0x17),
-            "MUL" => bytes.push(0x02),
-            "MSTORE" => bytes.push(0x52),
-            "ADDRESS" => bytes.push(0x30),
-            "SSTORE" => bytes.push(0x55),
+        let opcode = match ins.opcode.as_str() {
+            "PUSH1" => Opcode::PUSH(1),
+            "PUSH2" => Opcode::PUSH(2),
+            "PUSH32" => Opcode::PUSH(32),
+            "JUMPDEST" => Opcode::JUMPDEST,
+            "JUMP" => Opcode::JUMP,
+            "JUMPI" => Opcode::JUMPI,
+            "STOP" => Opcode::STOP,
+            "ADD" => Opcode::ADD,
+            "POP" => Opcode::POP,
+            "EQ" => Opcode::EQ,
+            "DUP1" => Opcode::DUP(1),
+            "DUP2" => Opcode::DUP(2),
+            "AND" => Opcode::AND,
+            "OR" => Opcode::OR,
+            "MUL" => Opcode::MUL,
+            "MSTORE" => Opcode::MSTORE,
+            "ADDRESS" => Opcode::ADDRESS,
+            "SSTORE" => Opcode::SSTORE,
+            "SUB" => Opcode::SUB,
+            "DIV" => Opcode::DIV,
+            "LT" => Opcode::LT,
+            "GT" => Opcode::GT,
+            "ISZERO" => Opcode::ISZERO,
+            "XOR" => Opcode::XOR,
+            "BALANCE" => Opcode::BALANCE,
+            "MLOAD" => Opcode::MLOAD,
+            "MSTORE8" => Opcode::MSTORE8,
+            "SLOAD" => Opcode::SLOAD,
+            "RETURN" => Opcode::RETURN,
+            "REVERT" => Opcode::REVERT,
+            "INVALID" => Opcode::INVALID,
+            "SELFDESTRUCT" => Opcode::SELFDESTRUCT,
+            "SWAP1" => Opcode::SWAP(1),
+            "SWAP2" => Opcode::SWAP(2),
             _ => return Err(EncodeError::UnsupportedOpcode(ins.opcode.clone())),
+        };
+
+        bytes.push(opcode.to_byte());
+
+        // Handle immediate data for PUSH opcodes
+        if let Opcode::PUSH(n) = opcode {
+            if let Some(imm) = &ins.imm {
+                let imm_bytes = hex::decode(imm)?;
+                if imm_bytes.len() != n as usize {
+                    return Err(EncodeError::InvalidImmediate(
+                        format!("PUSH{} requires {}-byte immediate", n, n),
+                    ));
+                }
+                bytes.extend_from_slice(&imm_bytes);
+            } else {
+                return Err(EncodeError::InvalidImmediate(
+                    format!("PUSH{} missing immediate", n),
+                ));
+            }
         }
     }
     Ok(bytes)
@@ -115,5 +106,16 @@ mod tests {
         };
         let bytes = encode(&[ins]).unwrap();
         assert_eq!(bytes, vec![0x5b]);
+    }
+
+    #[test]
+    fn encode_return() {
+        let ins = Instruction {
+            pc: 0,
+            opcode: "RETURN".to_string(),
+            imm: None,
+        };
+        let bytes = encode(&[ins]).unwrap();
+        assert_eq!(bytes, vec![0xf3]);
     }
 }

@@ -2,6 +2,7 @@ use crate::util::{PassConfig, Transform, TransformError};
 use async_trait::async_trait;
 use bytecloak_core::cfg_ir::{Block, CfgIrBundle};
 use bytecloak_core::decoder::Instruction;
+use bytecloak_core::opcode::Opcode;
 use rand::{Rng, rngs::StdRng};
 use tracing::debug;
 
@@ -15,9 +16,9 @@ impl StackNoise {
         Self { config }
     }
 
-    fn dup_instruction(&self, n: usize) -> Instruction {
+    fn dup_instruction(&self, n: u8, pc: usize) -> Instruction {
         Instruction {
-            pc: 0,
+            pc,
             opcode: format!("DUP{}", n),
             imm: None,
         }
@@ -38,6 +39,7 @@ impl Transform for StackNoise {
             if let Block::Body {
                 instructions,
                 max_stack,
+                start_pc,
                 ..
             } = &mut ir.cfg[node]
             {
@@ -55,21 +57,23 @@ impl Transform for StackNoise {
                 let insert_count = rng.random_range(1..=max_insertions);
                 for _ in 0..insert_count {
                     let insert_at = rng.random_range(0..=instructions.len());
-                    instructions.insert(insert_at, self.dup_instruction(2));
-                    instructions.insert(insert_at + 1, self.dup_instruction(2));
+                    let dup_n = rng.random_range(1..=3); // Randomize DUP1 to DUP3
+                    let current_pc = *start_pc + instructions.len();
+                    instructions.insert(insert_at, self.dup_instruction(dup_n, current_pc));
+                    instructions.insert(insert_at + 1, self.dup_instruction(dup_n, current_pc + 1));
                     instructions.insert(
                         insert_at + 2,
                         Instruction {
-                            pc: 0,
-                            opcode: "ADD".to_string(),
+                            pc: current_pc + 2,
+                            opcode: Opcode::ADD.to_string(),
                             imm: None,
                         },
                     );
                     instructions.insert(
                         insert_at + 3,
                         Instruction {
-                            pc: 0,
-                            opcode: "POP".to_string(),
+                            pc: current_pc + 3,
+                            opcode: Opcode::POP.to_string(),
                             imm: None,
                         },
                     );

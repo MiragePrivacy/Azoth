@@ -3,3 +3,4 @@ pub mod decoder;
 pub mod detection;
 pub mod encoder;
 pub mod strip;
+pub mod opcode;

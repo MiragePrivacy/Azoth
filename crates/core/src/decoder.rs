@@ -32,7 +32,7 @@ pub struct DecodeInfo {
 pub enum SourceType {
     HexString,
     File,
-    OnChain, // placeholder for future on-chain fetch
+    // OnChain remains for future RPC-based fetching
 }
 
 /// Custom error type for decoding operations.

@@ -2,6 +2,7 @@ use crate::util::{PassConfig, Transform, TransformError};
 use async_trait::async_trait;
 use bytecloak_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
 use bytecloak_core::decoder::Instruction;
+use bytecloak_core::opcode::Opcode;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rand::prelude::SliceRandom;
@@ -26,10 +27,16 @@ impl OpaquePredicate {
     }
 
     fn is_non_terminal(&self, instr: &Instruction) -> bool {
-        !matches!(
-            instr.opcode.as_str(),
-            "STOP" | "RETURN" | "REVERT" | "SELFDESTRUCT" | "INVALID" | "JUMP" | "JUMPI"
-        )
+        !Opcode::is_control_flow(&match instr.opcode.as_str() {
+            "STOP" => Opcode::STOP,
+            "RETURN" => Opcode::RETURN,
+            "REVERT" => Opcode::REVERT,
+            "SELFDESTRUCT" => Opcode::SELFDESTRUCT,
+            "INVALID" => Opcode::INVALID,
+            "JUMP" => Opcode::JUMP,
+            "JUMPI" => Opcode::JUMPI,
+            _ => Opcode::Other(0),
+        })
     }
 }
 
@@ -78,7 +85,7 @@ impl Transform for OpaquePredicate {
                 start_pc: true_start_pc,
                 instructions: vec![Instruction {
                     pc: true_start_pc,
-                    opcode: "JUMPDEST".to_string(),
+                    opcode: Opcode::JUMPDEST.to_string(),
                     imm: None,
                 }],
                 max_stack: 0,
@@ -89,17 +96,17 @@ impl Transform for OpaquePredicate {
                 instructions: vec![
                     Instruction {
                         pc: false_start_pc,
-                        opcode: "JUMPDEST".to_string(),
+                        opcode: Opcode::JUMPDEST.to_string(),
                         imm: None,
                     },
                     Instruction {
                         pc: false_start_pc + 1,
-                        opcode: "PUSH1".to_string(),
+                        opcode: Opcode::PUSH(1).to_string(),
                         imm: Some("00".to_string()),
                     },
                     Instruction {
                         pc: false_start_pc + 2,
-                        opcode: "JUMP".to_string(),
+                        opcode: Opcode::JUMP.to_string(),
                         imm: Some(
                             original_fallthrough
                                 .map(|n| {
@@ -123,37 +130,37 @@ impl Transform for OpaquePredicate {
                 instructions.extend(vec![
                     Instruction {
                         pc: 0,
-                        opcode: "PUSH32".to_string(),
+                        opcode: Opcode::PUSH(32).to_string(),
                         imm: Some(constant_hex.clone()),
                     },
                     Instruction {
                         pc: 0,
-                        opcode: "PUSH32".to_string(),
+                        opcode: Opcode::PUSH(32).to_string(),
                         imm: Some(constant_hex),
                     },
                     Instruction {
                         pc: 0,
-                        opcode: "EQ".to_string(),
+                        opcode: Opcode::EQ.to_string(),
                         imm: None,
                     },
                     Instruction {
                         pc: 0,
-                        opcode: "PUSH2".to_string(),
+                        opcode: Opcode::PUSH(2).to_string(),
                         imm: Some(format!("{:x}", true_start_pc)),
                     },
                     Instruction {
                         pc: 0,
-                        opcode: "JUMPI".to_string(),
+                        opcode: Opcode::JUMPI.to_string(),
                         imm: None,
                     },
                     Instruction {
                         pc: 0,
-                        opcode: "JUMPDEST".to_string(),
+                        opcode: Opcode::JUMPDEST.to_string(),
                         imm: None,
                     },
                     Instruction {
                         pc: 0,
-                        opcode: "JUMP".to_string(),
+                        opcode: Opcode::JUMP.to_string(),
                         imm: Some(format!("{:x}", false_start_pc)),
                     },
                 ]);
