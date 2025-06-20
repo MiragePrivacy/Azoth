@@ -1,5 +1,11 @@
 /// Module for constructing a Control Flow Graph (CFG) with Intermediate Representation (IR)
 /// in Static Single Assignment (SSA) form for EVM bytecode analysis.
+///
+/// This module builds a CFG from decoded EVM instructions, representing the program's control
+/// flow as a graph of basic blocks connected by edges. It supports SSA form for stack
+/// operations, enabling analysis and obfuscation transforms (e.g., shuffle, stack-noise,
+/// opaque-predicates). The CFG is used to analyze and modify bytecode structure, ensuring
+/// accurate block splitting and edge construction based on control flow opcodes.
 use crate::decoder::{DecodeError, Instruction};
 use crate::detection::Section;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -9,9 +15,9 @@ use thiserror::Error;
 /// Represents a node in the Control Flow Graph (CFG).
 ///
 /// A `Block` can be an entry point, an exit point, or a body block containing a sequence of EVM
-/// instructions. Blocks are used to partition the bytecode into logical units for analysis, with
-/// `Entry` and `Exit` serving as the start and end nodes of the CFG, respectively. Body blocks
-/// hold instructions and track the maximum stack height for Static Single Assignment (SSA) form
+/// instructions. Blocks partition the bytecode into logical units for analysis, with `Entry` and
+/// `Exit` serving as the start and end nodes of the CFG, respectively. Body blocks hold
+/// instructions and track the maximum stack height for Static Single Assignment (SSA) form
 /// analysis.
 #[derive(Default, Debug, Clone)]
 pub enum Block {
@@ -57,25 +63,31 @@ pub struct ValueId(usize);
 
 /// Bundle of CFG and associated metadata for analysis.
 ///
-/// Contains the control flow graph and a mapping of program counters to block indices
+/// Contains the control flow graph, a mapping of program counters to block indices, and a
+/// `CleanReport` for reassembling bytecode.
 #[derive(Debug, Clone)]
 pub struct CfgIrBundle {
     /// Graph representing the CFG with blocks as nodes and edges as control flow.
     pub cfg: DiGraph<Block, EdgeType>,
     /// Mapping of program counters to block indices.
     pub pc_to_block: HashMap<usize, NodeIndex>,
+    /// Report detailing the stripping process for bytecode reassembly.
     pub clean_report: crate::strip::CleanReport,
 }
 
 /// Error type for CFG and IR construction.
 #[derive(Debug, Error)]
 pub enum CfgIrError {
+    /// No valid entry block was found (e.g., empty instruction list).
     #[error("no valid entry block found")]
     NoEntryBlock,
+    /// No valid exit block was found.
     #[error("no valid exit block found")]
     NoExitBlock,
+    /// The instruction sequence is invalid (e.g., malformed control flow).
     #[error("invalid instruction sequence")]
     InvalidSequence,
+    /// Decoding error from the `decoder` module.
     #[error("decoding error: {0}")]
     DecodeError(#[from] DecodeError),
 }
@@ -84,15 +96,26 @@ pub enum CfgIrError {
 ///
 /// Constructs a control flow graph by splitting instructions into blocks, building edges based on
 /// control flow, and assigning SSA values to track stack operations. The resulting `CfgIrBundle`
-/// is used for further analysis, such as metrics computation in `bytecloak-analysis`.
+/// is used for further analysis and obfuscation transforms.
 ///
 /// # Arguments
 /// * `instructions` - Decoded EVM instructions from `decoder.rs`.
 /// * `sections` - Detected sections from `detection.rs`.
 /// * `bytecode` - Raw bytecode bytes.
+/// * `clean_report` - Report from `strip.rs` for reassembly.
 ///
 /// # Returns
-/// A `CfgIrBundle` containing the CFG and PC-to-block mapping, or an error if construction fails.
+/// A `Result` containing the `CfgIrBundle` or a `CfgIrError` if construction fails.
+///
+/// # Examples
+/// ```rust,ignore
+/// let bytecode = hex::decode("6001600155").unwrap();
+/// let (instructions, info, _) = decoder::decode_bytecode("0x6001600155", false).await.unwrap();
+/// let sections = detection::locate_sections(&bytecode, &instructions, &info).unwrap();
+/// let (_, report) = strip::strip_bytecode(&bytecode, &sections).unwrap();
+/// let cfg_ir = build_cfg_ir(&instructions, &sections, &bytecode, report).unwrap();
+/// assert!(cfg_ir.cfg.node_count() >= 2);
+/// ```
 pub fn build_cfg_ir(
     instructions: &[Instruction],
     _sections: &[Section],
@@ -134,6 +157,13 @@ pub fn build_cfg_ir(
 
 impl CfgIrBundle {
     /// Replaces the body of the CFG with new bytecode, rebuilding the CFG and PC mapping.
+    ///
+    /// # Arguments
+    /// * `new_bytecode` - The new bytecode to process.
+    /// * `sections` - Detected sections for the new bytecode.
+    ///
+    /// # Returns
+    /// A `Result` indicating success or a `CfgIrError` if rebuilding fails.
     pub async fn replace_body(
         &mut self,
         new_bytecode: Vec<u8>,
@@ -155,8 +185,8 @@ impl CfgIrBundle {
     }
 }
 
-/// Splits instructions into blocks at JUMPDEST, terminal opcodes (STOP, RETURN, …), or a valid
-/// static PUSH-JUMP target.
+/// Splits instructions into blocks at JUMPDEST, terminal opcodes, or valid static PUSH-JUMP
+/// targets.
 ///
 /// Iterates through instructions to identify block boundaries based on control flow instructions
 /// and jump targets, creating `Block::Body` instances for each segment. Ensures blocks are
@@ -167,7 +197,7 @@ impl CfgIrBundle {
 /// * `bytecode` - Raw bytecode bytes for jump target validation.
 ///
 /// # Returns
-/// A vector of `Block` instances, or an error if no blocks are created.
+/// A `Result` containing a vector of `Block` instances or a `CfgIrError` if no blocks are created.
 fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Block>, CfgIrError> {
     let mut blocks = Vec::new();
     let mut cur_block = Block::Body {
@@ -350,7 +380,7 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
     Ok(blocks)
 }
 
-/// Type alias for build_edges return type
+/// Type alias for the return type of `build_edges`.
 type BuildEdgesResult = Result<
     (
         Vec<(NodeIndex, NodeIndex, EdgeType)>,
@@ -362,7 +392,7 @@ type BuildEdgesResult = Result<
 /// Builds edges between blocks based on control flow.
 ///
 /// Constructs edges for the CFG by analyzing instruction sequences and control flow instructions
-/// (JUMP, JUMPI, STOP, etc.). Connects blocks with appropriate edge types (Fallthrough, Jump,
+/// (e.g., JUMP, JUMPI, STOP). Connects blocks with appropriate edge types (Fallthrough, Jump,
 /// BranchTrue, BranchFalse) and maps program counters to block indices.
 ///
 /// # Arguments
@@ -371,7 +401,7 @@ type BuildEdgesResult = Result<
 /// * `cfg` - The CFG graph to populate with nodes and edges.
 ///
 /// # Returns
-/// A tuple of edge definitions and a PC-to-block mapping, or an error if edge construction fails.
+/// A `Result` containing a tuple of edge definitions and a PC-to-block mapping, or a `CfgIrError`.
 fn build_edges(
     blocks: &[Block],
     _instructions: &[Instruction],
@@ -402,7 +432,7 @@ fn build_edges(
     // Add edge from Entry to first block, collapsing if let
     if let Some(Block::Body { start_pc, .. }) = blocks.first() {
         if let Some(&target) = node_map.get(start_pc) {
-            edges.push((NodeIndex::new(0), target, EdgeType::Fallthrough)); // Entry is node 0
+            edges.push((NodeIndex::new(0), target, EdgeType::Fallthrough));
         }
     }
 
@@ -427,7 +457,7 @@ fn build_edges(
                         edges.push((start_idx, next_idx, EdgeType::Fallthrough));
                     }
                 } else {
-                    let exit_idx = NodeIndex::new(cfg.node_count() - 1); // Exit is last node
+                    let exit_idx = NodeIndex::new(cfg.node_count() - 1);
                     edges.push((start_idx, exit_idx, EdgeType::Fallthrough));
                 }
                 continue;
@@ -464,7 +494,7 @@ fn build_edges(
                     }
                 }
                 "STOP" | "RETURN" | "REVERT" | "SELFDESTRUCT" | "INVALID" => {
-                    let exit_idx = NodeIndex::new(cfg.node_count() - 1); // Exit is last node
+                    let exit_idx = NodeIndex::new(cfg.node_count() - 1);
                     edges.push((start_idx, exit_idx, EdgeType::Fallthrough));
                 }
                 _ => {
@@ -477,7 +507,7 @@ fn build_edges(
                             edges.push((start_idx, next_idx, EdgeType::Fallthrough));
                         }
                     } else {
-                        let exit_idx = NodeIndex::new(cfg.node_count() - 1); // Exit is last node
+                        let exit_idx = NodeIndex::new(cfg.node_count() - 1);
                         edges.push((start_idx, exit_idx, EdgeType::Fallthrough));
                     }
                 }
@@ -492,7 +522,7 @@ fn build_edges(
 ///
 /// Walks through each block’s instructions to assign SSA `ValueId`s for stack operations (e.g.,
 /// PUSH) and compute the maximum stack height. Updates the `max_stack` field in `Block::Body`
-/// instances and constructs the final `CfgIrBundle`.
+/// instances.
 ///
 /// # Arguments
 /// * `cfg` - The CFG graph with nodes populated.
@@ -500,8 +530,7 @@ fn build_edges(
 /// * `instructions` - Decoded EVM instructions.
 ///
 /// # Returns
-/// A `CfgIrBundle` with the updated CFG and PC-to-block mapping, or an error if SSA assignment
-/// fails.
+/// A `Result` indicating success or a `CfgIrError` if SSA assignment fails.
 fn assign_ssa_values(
     cfg: &mut DiGraph<Block, EdgeType>,
     _pc_to_block: &HashMap<usize, NodeIndex>,
@@ -519,7 +548,7 @@ fn assign_ssa_values(
         if let Block::Body { instructions, .. } = block {
             for instr in instructions {
                 tracing::debug!("Processing opcode {} at pc={}", instr.opcode, instr.pc);
-                if instr.opcode.starts_with("PUSH") || instr.opcode == "DUP" {
+                if instr.opcode.starts_with("PUSH") || instr.opcode.starts_with("DUP") {
                     cur_depth += 1;
                 } else if instr.opcode == "POP" && stack.pop().is_some() {
                     cur_depth = cur_depth.saturating_sub(1);
@@ -548,7 +577,7 @@ fn assign_ssa_values(
     Ok(())
 }
 
-/// Helper to access start_pc for a block.
+/// Returns the starting program counter for a block.
 impl Block {
     fn start_pc(&self) -> usize {
         match self {

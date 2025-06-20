@@ -1,3 +1,9 @@
+/// Module for the `obfuscate` subcommand, which applies obfuscation transforms to EVM
+/// bytecode.
+///
+/// This module processes input bytecode, constructs a CFG, applies specified transforms (e.g.,
+/// shuffle, stack-noise, opaque-predicates), and outputs the obfuscated bytecode. It also
+/// generates a gas and size report if requested.
 use async_trait::async_trait;
 use bytecloak_core::cfg_ir::Block;
 use bytecloak_core::decoder::decode_bytecode;
@@ -15,36 +21,56 @@ use std::fs;
 use std::path::Path;
 use thiserror::Error;
 
+/// Errors that can occur during obfuscation.
 #[derive(Debug, Error)]
 pub enum ObfuscateError {
+    /// The hex string has an odd length, making it invalid.
     #[error("hex string has odd length: {0}")]
     OddLength(usize),
+    /// Failed to decode hex string to bytes.
     #[error("hex decode error: {0}")]
     HexDecode(#[from] hex::FromHexError),
+    /// File read/write error.
     #[error("file error: {0}")]
     File(#[from] std::io::Error),
+    /// Transform application failed.
     #[error("transform error: {0}")]
     Transform(#[from] bytecloak_transform::util::TransformError),
+    /// Invalid transform pass specified.
     #[error("invalid pass: {0}")]
     InvalidPass(String),
+    /// JSON serialization error.
     #[error("serialization error: {0}")]
     Serialize(#[from] serde_json::Error),
 }
 
+/// Arguments for the `obfuscate` subcommand.
 #[derive(Args)]
 pub struct ObfuscateArgs {
+    /// Random seed for transform application (default: 42).
     #[arg(long, default_value_t = 42)]
     seed: u64,
+    /// Comma-separated list of transforms (default: shuffle,stack_noise,opaque_pred).
     #[arg(long, default_value = "shuffle,stack_noise,opaque_pred")]
     passes: String,
+    /// Minimum quality threshold for accepting transforms (default: 0.0).
     #[arg(long, default_value_t = 0.0)]
     accept_threshold: f64,
+    /// Maximum allowable size increase as a fraction (default: 0.1).
     #[arg(long, default_value_t = 0.1)]
     max_size_delta: f32,
+    /// Path to emit gas/size report as JSON (optional).
     #[arg(long)]
     emit: Option<String>,
 }
 
+/// Executes the `obfuscate` subcommand to apply transforms and output obfuscated bytecode.
+///
+/// # Arguments
+/// * `input` - A hex string, .hex file, or binary file containing EVM bytecode.
+///
+/// # Returns
+/// A `Result` indicating success or an error if processing fails.
 #[async_trait]
 impl super::Command for ObfuscateArgs {
     async fn execute(self, input: &str) -> Result<(), Box<dyn Error>> {
@@ -120,6 +146,13 @@ impl super::Command for ObfuscateArgs {
     }
 }
 
+/// Normalizes a hex string by removing prefixes and underscores.
+///
+/// # Arguments
+/// * `s` - The input hex string (e.g., "0x1234", "12_34").
+///
+/// # Returns
+/// A `Result` containing the cleaned hex string or an `ObfuscateError` if invalid.
 fn normalise_hex(s: &str) -> Result<String, ObfuscateError> {
     let stripped = s.trim().trim_start_matches("0x").replace('_', "");
 
@@ -129,6 +162,13 @@ fn normalise_hex(s: &str) -> Result<String, ObfuscateError> {
     Ok(stripped)
 }
 
+/// Builds a list of transform passes from a comma-separated string.
+///
+/// # Arguments
+/// * `list` - A string of transform names (e.g., "shuffle,stack_noise").
+///
+/// # Returns
+/// A `Result` containing a vector of `Box<dyn Transform>` or an error if a pass is invalid.
 fn build_passes(list: &str) -> Result<Vec<Box<dyn Transform>>, Box<dyn Error>> {
     list.split(',')
         .filter(|s| !s.is_empty())
@@ -151,6 +191,14 @@ fn build_passes(list: &str) -> Result<Vec<Box<dyn Transform>>, Box<dyn Error>> {
         .collect()
 }
 
+/// Generates a JSON report comparing original and obfuscated bytecode sizes and gas costs.
+///
+/// # Arguments
+/// * `original_len` - The length of the original runtime bytecode.
+/// * `new_len` - The length of the obfuscated runtime bytecode.
+///
+/// # Returns
+/// A `serde_json::Value` containing the report.
 fn gas_report(original_len: usize, new_len: usize) -> serde_json::Value {
     let gas = |bytes| 32_000 + 200 * bytes as u64;
     json!({
