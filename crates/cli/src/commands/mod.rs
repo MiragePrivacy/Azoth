@@ -1,25 +1,42 @@
+/// Module defining the CLI subcommands for Bytecloak.
+///
+/// This module provides the subcommands for decoding, stripping, CFG visualization, and
+/// obfuscating EVM bytecode, along with the `Command` trait for executing them.
 use async_trait::async_trait;
 use clap::Subcommand;
 use std::error::Error;
 
 pub mod cfg;
 pub mod decode;
+pub mod obfuscate;
 pub mod strip;
 
+/// CLI subcommands for Bytecloak.
 #[derive(Subcommand)]
 pub enum Cmd {
     /// Decode bytecode to annotated assembly
     Decode(decode::DecodeArgs),
-
     /// Strip init/auxdata, dump runtime hex
     Strip(strip::StripArgs),
-
     /// Write runtime CFG to stdout or a file
     Cfg(cfg::CfgArgs),
+    /// Obfuscate bytecode with specified transforms
+    Obfuscate(obfuscate::ObfuscateArgs),
 }
 
+/// Trait for executing CLI subcommands.
+///
+/// Implementors define the logic for processing input bytecode and producing output (e.g.,
+/// assembly, stripped bytecode, CFG, or obfuscated bytecode).
 #[async_trait]
 pub trait Command {
+    /// Executes the subcommand with the given input.
+    ///
+    /// # Arguments
+    /// * `input` - A string containing the input bytecode or file path.
+    ///
+    /// # Returns
+    /// A `Result` indicating success or an error if execution fails.
     async fn execute(self, input: &str) -> Result<(), Box<dyn Error>>;
 }
 
@@ -30,6 +47,7 @@ impl Command for Cmd {
             Cmd::Decode(args) => args.execute(input).await,
             Cmd::Strip(args) => args.execute(input).await,
             Cmd::Cfg(args) => args.execute(input).await,
+            Cmd::Obfuscate(args) => args.execute(input).await,
         }
     }
 }

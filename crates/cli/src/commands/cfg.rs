@@ -1,12 +1,20 @@
+/// Module for the `cfg` subcommand, which visualizes the control flow graph (CFG) of EVM
+/// bytecode.
+///
+/// This module processes input bytecode, constructs a CFG using the `cfg_ir` module, and
+/// generates a Graphviz .dot file representing the CFG. The output can be written to a file or
+/// printed to stdout.
 use async_trait::async_trait;
 use bytecloak_core::cfg_ir::{Block, CfgIrBundle, EdgeType, build_cfg_ir};
 use bytecloak_core::decoder::decode_bytecode;
 use bytecloak_core::detection::locate_sections;
+use bytecloak_core::strip::strip_bytecode;
 use clap::Args;
 use hex::FromHex;
 use std::error::Error;
 use std::fs;
 
+/// Arguments for the `cfg` subcommand.
 #[derive(Args)]
 pub struct CfgArgs {
     /// Output file for Graphviz .dot (default: stdout)
@@ -14,6 +22,13 @@ pub struct CfgArgs {
     output: Option<String>,
 }
 
+/// Executes the `cfg` subcommand to generate a CFG visualization.
+///
+/// # Arguments
+/// * `input` - A hex string (0x...) or file path (@...) containing EVM bytecode.
+///
+/// # Returns
+/// A `Result` indicating success or an error if processing fails.
 #[async_trait]
 impl super::Command for CfgArgs {
     async fn execute(self, input: &str) -> Result<(), Box<dyn Error>> {
@@ -26,7 +41,8 @@ impl super::Command for CfgArgs {
 
         let (instructions, info, _) = decode_bytecode(input, is_file).await?;
         let sections = locate_sections(&bytes, &instructions, &info)?;
-        let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes)?;
+        let (_clean_runtime, clean_report) = strip_bytecode(&bytes, &sections)?;
+        let cfg_ir = build_cfg_ir(&instructions, &sections, &bytes, clean_report)?;
 
         let dot = generate_dot(&cfg_ir);
         if let Some(out_path) = self.output {
@@ -38,6 +54,13 @@ impl super::Command for CfgArgs {
     }
 }
 
+/// Generates a Graphviz .dot representation of the CFG.
+///
+/// # Arguments
+/// * `cfg_ir` - The `CfgIrBundle` containing the CFG to visualize.
+///
+/// # Returns
+/// A `String` containing the .dot file content.
 fn generate_dot(cfg_ir: &CfgIrBundle) -> String {
     let mut dot = String::from("digraph CFG {\n");
 

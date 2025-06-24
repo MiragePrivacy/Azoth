@@ -1,6 +1,9 @@
 [workspace]
-members = [ "crates/cli",
+members = [
+  "crates/analysis",
+  "crates/cli",
   "crates/core",
+  "crates/transforms",
 ]
 resolver = "2"
 
@@ -23,7 +26,13 @@ tokio = { version = "1.45.1", features = ["full"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 petgraph = "0.8.2"
+rand = "0.9.1"
+anvil = "0.3.1"
+ethers = "2.0.14"
+anyhow = "1.0.98"
 
 # bytecloak
 bytecloak-core = { path = "crates/core" }
 bytecloak-cli = { path = "crates/cli" }
+bytecloak-analysis = { path = "crates/analysis" }
+bytecloak-transform = { path = "crates/transforms" }
