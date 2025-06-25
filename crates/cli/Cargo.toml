@@ -11,6 +11,7 @@ path = "src/main.rs"
 async-trait.workspace = true
 bytecloak-core = { path = "../core" }
 bytecloak-transform = { path = "../transforms" }
+bytecloak-utils = { path = "../utils" }
 clap = { workspace = true, features = ["derive"] }
 hex.workspace = true
 serde_json.workspace = true

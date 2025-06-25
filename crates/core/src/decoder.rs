@@ -1,8 +1,8 @@
 //! bytecloak’s single entry-point for turning byte-sequences into Heimdall instruction streams.
+use bytecloak_utils::errors::DecodeError;
 use heimdall::{DisassemblerArgsBuilder, disassemble};
 use hex::FromHex;
 use std::{fmt, fs, path::Path};
-use thiserror::Error;
 use tiny_keccak::{Hasher, Keccak};
 
 /// Represents a single disassembled instruction.
@@ -35,32 +35,8 @@ pub enum SourceType {
     // OnChain remains for future RPC-based fetching
 }
 
-/// Custom error type for decoding operations.
-#[derive(Debug, Error)]
-pub enum DecodeError {
-    #[error("hex decode failed: {0}")]
-    HexDecode(#[from] hex::FromHexError),
-
-    #[error("could not read file '{path}': {source}")]
-    FileRead {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error("heimdall disassembly failed: {0}")]
-    Heimdall(String),
-
-    #[error("assembly parse error at line {line}: {msg} ⇒ `{raw}`")]
-    Parse {
-        line: usize,
-        msg: String,
-        raw: String,
-    },
-}
-
 /// Normalizes input into a byte vector from hex string or file.
-fn input_to_bytes(input: &str, is_file: bool) -> Result<Vec<u8>, DecodeError> {
+pub fn input_to_bytes(input: &str, is_file: bool) -> Result<Vec<u8>, DecodeError> {
     if is_file {
         let path = Path::new(input);
         fs::read(path).map_err(|e| DecodeError::FileRead {

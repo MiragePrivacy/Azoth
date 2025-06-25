@@ -1,0 +1,10 @@
+[package]
+name = "bytecloak-utils"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

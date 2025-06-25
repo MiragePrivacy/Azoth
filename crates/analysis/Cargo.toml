@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 bytecloak-core = { path = "../core" }
+bytecloak-utils = { path = "../utils" }
 petgraph.workspace = true
 serde.workspace = true
 tokio.workspace = true

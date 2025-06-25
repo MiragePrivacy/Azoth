@@ -15,8 +15,8 @@
 /// assert!(!sections.is_empty());
 /// ```
 use crate::decoder::{DecodeInfo, Instruction};
+use bytecloak_utils::errors::DetectError;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 /// Represents the type of a bytecode section.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,17 +53,6 @@ impl Section {
     pub fn end(self) -> usize {
         self.offset + self.len
     }
-}
-
-/// Custom error type for detection operations.
-#[derive(Debug, Error)]
-pub enum DetectError {
-    #[error("overlapping sections detected at offset {0}")]
-    Overlap(usize),
-    #[error("gap detected at offset {0}")]
-    Gap(usize),
-    #[error("auxdata overlap detected")]
-    AuxdataOverlap,
 }
 
 /// Locates all non-overlapping, offset-ordered sections in the bytecode.

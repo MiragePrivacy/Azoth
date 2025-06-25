@@ -1,25 +1,8 @@
 use async_trait::async_trait;
 use bytecloak_core::cfg_ir::CfgIrBundle;
+use bytecloak_utils::errors::TransformError;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
-
-/// Error type for transform operations.
-#[derive(Debug, Error)]
-pub enum TransformError {
-    #[error("bytecode size exceeds maximum allowed delta")]
-    SizeLimitExceeded,
-    #[error("stack depth exceeds maximum limit of 1024")]
-    StackOverflow,
-    #[error("invalid jump target: {0}")]
-    InvalidJumpTarget(usize),
-    #[error("instruction encoding failed: {0}")]
-    EncodingError(String),
-    #[error("core operation failed")]
-    CoreError(#[from] bytecloak_core::cfg_ir::CfgIrError),
-    #[error("metrics computation failed")]
-    MetricsError(#[from] bytecloak_analysis::metrics::MetricsError),
-}
 
 /// Trait for bytecode obfuscation transforms.
 #[async_trait]

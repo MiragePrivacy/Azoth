@@ -5,48 +5,29 @@
 /// shuffle, stack-noise, opaque-predicates), and outputs the obfuscated bytecode. It also
 /// generates a gas and size report if requested.
 use async_trait::async_trait;
-use bytecloak_core::cfg_ir::Block;
-use bytecloak_core::decoder::decode_bytecode;
-use bytecloak_core::detection::locate_sections;
-use bytecloak_core::encoder::{encode, rebuild};
-use bytecloak_core::strip::strip_bytecode;
+use bytecloak_core::{
+    cfg_ir::Block,
+    decoder::decode_bytecode,
+    detection::locate_sections,
+    encoder::{encode, rebuild},
+    strip::strip_bytecode,
+};
 use bytecloak_transform::{
     pass,
     util::{PassConfig, Transform},
 };
+use bytecloak_utils::errors::ObfuscateError;
 use clap::Args;
 use serde_json::json;
 use std::error::Error;
 use std::fs;
 use std::path::Path;
-use thiserror::Error;
-
-/// Errors that can occur during obfuscation.
-#[derive(Debug, Error)]
-pub enum ObfuscateError {
-    /// The hex string has an odd length, making it invalid.
-    #[error("hex string has odd length: {0}")]
-    OddLength(usize),
-    /// Failed to decode hex string to bytes.
-    #[error("hex decode error: {0}")]
-    HexDecode(#[from] hex::FromHexError),
-    /// File read/write error.
-    #[error("file error: {0}")]
-    File(#[from] std::io::Error),
-    /// Transform application failed.
-    #[error("transform error: {0}")]
-    Transform(#[from] bytecloak_transform::util::TransformError),
-    /// Invalid transform pass specified.
-    #[error("invalid pass: {0}")]
-    InvalidPass(String),
-    /// JSON serialization error.
-    #[error("serialization error: {0}")]
-    Serialize(#[from] serde_json::Error),
-}
 
 /// Arguments for the `obfuscate` subcommand.
 #[derive(Args)]
 pub struct ObfuscateArgs {
+    /// Input bytecode as a hex string, .hex file, or binary file containing EVM bytecode.
+    pub input: String,
     /// Random seed for transform application (default: 42).
     #[arg(long, default_value_t = 42)]
     seed: u64,
@@ -65,28 +46,22 @@ pub struct ObfuscateArgs {
 }
 
 /// Executes the `obfuscate` subcommand to apply transforms and output obfuscated bytecode.
-///
-/// # Arguments
-/// * `input` - A hex string, .hex file, or binary file containing EVM bytecode.
-///
-/// # Returns
-/// A `Result` indicating success or an error if processing fails.
 #[async_trait]
 impl super::Command for ObfuscateArgs {
-    async fn execute(self, input: &str) -> Result<(), Box<dyn Error>> {
+    async fn execute(self) -> Result<(), Box<dyn Error>> {
         let (bytes, decode_input, is_file) = {
-            if input.trim_start().starts_with("0x") {
-                let clean = normalise_hex(input)?;
+            if self.input.trim_start().starts_with("0x") {
+                let clean = normalise_hex(&self.input)?;
                 let raw = hex::decode(&clean)?;
-                (raw, input.to_string(), false)
-            } else if Path::new(input).extension().and_then(|s| s.to_str()) == Some("hex") {
-                let s = fs::read_to_string(input)?;
+                (raw, self.input.to_string(), false)
+            } else if Path::new(&self.input).extension().and_then(|s| s.to_str()) == Some("hex") {
+                let s = fs::read_to_string(&self.input)?;
                 let clean = normalise_hex(&s)?;
                 let raw = hex::decode(&clean)?;
                 (raw, clean.clone(), false)
             } else {
-                let raw = fs::read(input)?;
-                (raw, input.to_string(), true)
+                let raw = fs::read(&self.input)?;
+                (raw, self.input.to_string(), true)
             }
         };
 
@@ -147,15 +122,8 @@ impl super::Command for ObfuscateArgs {
 }
 
 /// Normalizes a hex string by removing prefixes and underscores.
-///
-/// # Arguments
-/// * `s` - The input hex string (e.g., "0x1234", "12_34").
-///
-/// # Returns
-/// A `Result` containing the cleaned hex string or an `ObfuscateError` if invalid.
 fn normalise_hex(s: &str) -> Result<String, ObfuscateError> {
     let stripped = s.trim().trim_start_matches("0x").replace('_', "");
-
     if stripped.len() % 2 != 0 {
         return Err(ObfuscateError::OddLength(stripped.len()));
     }
@@ -163,12 +131,6 @@ fn normalise_hex(s: &str) -> Result<String, ObfuscateError> {
 }
 
 /// Builds a list of transform passes from a comma-separated string.
-///
-/// # Arguments
-/// * `list` - A string of transform names (e.g., "shuffle,stack_noise").
-///
-/// # Returns
-/// A `Result` containing a vector of `Box<dyn Transform>` or an error if a pass is invalid.
 fn build_passes(list: &str) -> Result<Vec<Box<dyn Transform>>, Box<dyn Error>> {
     list.split(',')
         .filter(|s| !s.is_empty())
@@ -229,6 +191,7 @@ mod tests {
         let temp_report = dir.join("report.json");
 
         let args = ObfuscateArgs {
+            input: path.to_str().unwrap().to_string(),
             seed: 42,
             passes: "shuffle,stack_noise,opaque_pred".to_string(),
             accept_threshold: 0.0,
@@ -236,7 +199,7 @@ mod tests {
             emit: Some(temp_report.to_str().unwrap().to_string()),
         };
 
-        let result = args.execute(path.to_str().unwrap()).await;
+        let result = args.execute().await;
         if let Err(e) = result {
             panic!("CLI errored: {:?}", e);
         }
@@ -258,14 +221,15 @@ mod tests {
         fs::write(&path, input).unwrap();
 
         let args = ObfuscateArgs {
+            input: path.to_str().unwrap().to_string(),
             seed: 42,
             passes: "stack_noise".to_string(),
             accept_threshold: 0.0,
-            max_size_delta: 0.0001, // 0.01% threshold
+            max_size_delta: 0.0001,
             emit: None,
         };
 
-        let result = args.execute(path.to_str().unwrap()).await;
+        let result = args.execute().await;
         assert!(result.is_err(), "should reject when growth > 0.01 %");
         fs::remove_file(&path).unwrap();
     }

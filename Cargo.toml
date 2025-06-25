@@ -3,7 +3,8 @@ members = [
   "crates/analysis",
   "crates/cli",
   "crates/core",
-  "crates/transforms",
+  "crates/transforms", 
+  "crates/utils",
 ]
 resolver = "2"
 
@@ -36,3 +37,4 @@ bytecloak-core = { path = "crates/core" }
 bytecloak-cli = { path = "crates/cli" }
 bytecloak-analysis = { path = "crates/analysis" }
 bytecloak-transform = { path = "crates/transforms" }
+bytecloak-utils = { path = "crates/utils" }

@@ -26,7 +26,9 @@ Every transform must raise Potency and Resilience above clearly defined threshol
 ### Quick Start
 
 ```bash
+cd crates/cli
 cargo install --path .
-bytecloak decode 0x…   # disassemble & visualise
+bytecloak decode 0x...   # disassemble & visualise
+btyecode strip 0x...
 bytecloak obfuscate mybytecode.hex --seed 42 > out.hex
 ```

@@ -1191,6 +1191,7 @@ name = "bytecloak-analysis"
 version = "0.1.0"
 dependencies = [
  "bytecloak-core",
+ "bytecloak-utils",
  "hex",
  "petgraph 0.8.2",
  "serde",
@@ -1209,6 +1210,7 @@ dependencies = [
  "async-trait",
  "bytecloak-core",
  "bytecloak-transform",
+ "bytecloak-utils",
  "clap",
  "ethers",
  "hex",
@@ -1224,6 +1226,7 @@ dependencies = [
 name = "bytecloak-core"
 version = "0.1.0"
 dependencies = [
+ "bytecloak-utils",
  "heimdall-disassembler",
  "hex",
  "petgraph 0.8.2",
@@ -1244,6 +1247,7 @@ dependencies = [
  "async-trait",
  "bytecloak-analysis",
  "bytecloak-core",
+ "bytecloak-utils",
  "hex",
  "petgraph 0.8.2",
  "rand 0.9.1",
@@ -1253,6 +1257,16 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "bytecloak-utils"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "serde_json",
+ "thiserror 2.0.12",
 ]
 
 [[package]]

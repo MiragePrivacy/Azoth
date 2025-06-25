@@ -9,22 +9,8 @@
 use crate::decoder::Instruction;
 use crate::opcode::Opcode;
 use crate::strip::CleanReport;
+use bytecloak_utils::errors::EncodeError;
 use hex;
-use thiserror::Error;
-
-/// Errors that can occur during the encoding process.
-#[derive(Debug, Error)]
-pub enum EncodeError {
-    /// The immediate data for a PUSH opcode is invalid (e.g., wrong length or malformed hex).
-    #[error("invalid immediate: {0}")]
-    InvalidImmediate(String),
-    /// The opcode is not supported by the encoder (e.g., unknown or unimplemented opcode).
-    #[error("unsupported opcode: {0}")]
-    UnsupportedOpcode(String),
-    /// Failed to decode hex immediate data (e.g., invalid hex characters).
-    #[error("hex decode error: {0}")]
-    HexDecode(#[from] hex::FromHexError),
-}
 
 /// Encodes a sequence of EVM instructions into bytecode.
 ///

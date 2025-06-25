@@ -1,9 +1,10 @@
-use crate::util::{Transform, TransformError};
+use crate::util::Transform;
 use async_trait::async_trait;
 use bytecloak_core::cfg_ir::{Block, CfgIrBundle};
 use bytecloak_core::decoder::Instruction;
 use bytecloak_core::encoder;
 use bytecloak_core::opcode::Opcode;
+use bytecloak_utils::errors::TransformError;
 use rand::{rngs::StdRng, seq::SliceRandom};
 use std::collections::HashMap;
 use tracing::debug;

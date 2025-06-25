@@ -1,8 +1,9 @@
-use crate::util::{PassConfig, Transform, TransformError};
+use crate::util::{PassConfig, Transform};
 use async_trait::async_trait;
 use bytecloak_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
 use bytecloak_core::decoder::Instruction;
 use bytecloak_core::opcode::Opcode;
+use bytecloak_utils::errors::TransformError;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rand::prelude::SliceRandom;
