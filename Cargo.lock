@@ -2073,9 +2073,9 @@ dependencies = [
 
 [[package]]
 name = "eot"
-version = "0.1.1"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db5dad2ebc41c786ec4aaf7294cb1669f4e4beb46a286a407e3c6d09f7a005a2"
+checksum = "5f68882ae868255ca621698f03d73112ce5e06648c75ab5d3cd228923a53d83c"
 
 [[package]]
 name = "equivalent"

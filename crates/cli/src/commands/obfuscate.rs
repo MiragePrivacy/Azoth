@@ -7,9 +7,9 @@
 use async_trait::async_trait;
 use bytecloak_core::{
     cfg_ir::Block,
-    decoder::decode_bytecode,
+    decoder::{decode_bytecode, Instruction},
     detection::locate_sections,
-    encoder::{encode, rebuild},
+    encoder::{encode_with_original, rebuild},
     strip::strip_bytecode,
 };
 use bytecloak_transform::{
@@ -19,6 +19,7 @@ use bytecloak_transform::{
 use bytecloak_utils::errors::ObfuscateError;
 use clap::Args;
 use serde_json::json;
+use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
 use std::path::Path;
@@ -45,6 +46,26 @@ pub struct ObfuscateArgs {
     emit: Option<String>,
 }
 
+/// Analyzes instructions to count unknown opcodes and provide feedback.
+fn analyze_instructions(instructions: &[Instruction]) -> (usize, usize, Vec<String>) {
+    let total_count = instructions.len();
+    let mut unknown_count = 0;
+    let mut unknown_types = HashSet::new();
+
+    for instr in instructions {
+        if instr.opcode == "unknown" || instr.opcode.starts_with("UNKNOWN_") {
+            unknown_count += 1;
+            unknown_types.insert(instr.opcode.clone());
+        }
+    }
+
+    (
+        total_count,
+        unknown_count,
+        unknown_types.into_iter().collect(),
+    )
+}
+
 /// Executes the `obfuscate` subcommand to apply transforms and output obfuscated bytecode.
 #[async_trait]
 impl super::Command for ObfuscateArgs {
@@ -66,6 +87,24 @@ impl super::Command for ObfuscateArgs {
         };
 
         let (instructions, info, _) = decode_bytecode(&decode_input, is_file).await?;
+
+        // Analyze and report unknown opcodes
+        let (total_instructions, unknown_count, unknown_types) =
+            analyze_instructions(&instructions);
+        if unknown_count > 0 {
+            println!("Input Analysis:");
+            println!("   Total instructions: {}", total_instructions);
+            println!(
+                "Unknown opcodes: {} ({:.1}%)",
+                unknown_count,
+                100.0 * unknown_count as f64 / total_instructions as f64
+            );
+            println!("Unknown types found: {:?}", unknown_types);
+            println!("   → These will be preserved as raw bytes in the output.");
+            println!("   → If the original contract works, the obfuscated version should too.");
+            println!();
+        }
+
         let sections = locate_sections(&bytes, &instructions, &info)?;
         let (clean_runtime, clean_report) = strip_bytecode(&bytes, &sections)?;
         let original_len = clean_runtime.len();
@@ -84,6 +123,29 @@ impl super::Command for ObfuscateArgs {
             max_noise_ratio: 0.5,
             max_opaque_ratio: 0.5,
         };
+
+        // Track size before transforms
+        let initial_size = {
+            let mut initial_instructions = Vec::new();
+            for node in cfg_ir.cfg.node_indices() {
+                if let Block::Body {
+                    instructions: block_ins,
+                    ..
+                } = &cfg_ir.cfg[node]
+                {
+                    initial_instructions.extend(block_ins.iter().cloned());
+                }
+            }
+            let initial_bytes = encode_with_original(&initial_instructions, Some(&bytes))?;
+            initial_bytes.len()
+        };
+
+        println!("Transform Analysis:");
+        println!("Original size: {} bytes", original_len);
+        println!("Pre-transform size: {} bytes", initial_size);
+        println!("Applying {} transforms...", passes.len());
+
+        // Apply all transforms at once (original behavior)
         pass::run(&mut cfg_ir, &passes, &cfg, self.seed).await?;
 
         let mut instructions = Vec::new();
@@ -96,7 +158,9 @@ impl super::Command for ObfuscateArgs {
                 instructions.extend(block_ins.iter().cloned());
             }
         }
-        let obf_runtime = encode(&instructions)?;
+
+        // Encode with unknown opcode handling - pass original bytecode for PC lookup
+        let obf_runtime = encode_with_original(&instructions, Some(&bytes))?;
         let final_bytecode = rebuild(&obf_runtime, &clean_report);
         let new_len = obf_runtime.len();
 
@@ -111,10 +175,27 @@ impl super::Command for ObfuscateArgs {
         }
 
         if let Some(path) = self.emit {
-            let report = gas_report(original_len, new_len);
+            let report = gas_report(original_len, new_len, unknown_count);
             fs::write(&path, serde_json::to_string_pretty(&report)?)?;
-            println!("Wrote gas/size report to {}", &path);
+            println!("📊 Wrote gas/size report to {}", &path);
         }
+
+        // Success summary
+        if unknown_count > 0 {
+            println!(
+                "✅ Obfuscation complete with {} unknown opcodes preserved",
+                unknown_count
+            );
+        } else {
+            println!("✅ Obfuscation complete");
+        }
+        println!(
+            "📈 Size change: {} → {} bytes ({:+.1}%)",
+            original_len,
+            new_len,
+            100.0 * (new_len as f32 / original_len as f32 - 1.0)
+        );
+        println!();
 
         println!("0x{}", hex::encode(final_bytecode));
         Ok(())
@@ -158,10 +239,11 @@ fn build_passes(list: &str) -> Result<Vec<Box<dyn Transform>>, Box<dyn Error>> {
 /// # Arguments
 /// * `original_len` - The length of the original runtime bytecode.
 /// * `new_len` - The length of the obfuscated runtime bytecode.
+/// * `unknown_count` - Number of unknown opcodes preserved.
 ///
 /// # Returns
 /// A `serde_json::Value` containing the report.
-fn gas_report(original_len: usize, new_len: usize) -> serde_json::Value {
+fn gas_report(original_len: usize, new_len: usize, unknown_count: usize) -> serde_json::Value {
     let gas = |bytes| 32_000 + 200 * bytes as u64;
     json!({
         "original_bytes": original_len,
@@ -170,7 +252,13 @@ fn gas_report(original_len: usize, new_len: usize) -> serde_json::Value {
         "original_deploy_gas": gas(original_len),
         "obfuscated_deploy_gas": gas(new_len),
         "gas_delta": (gas(new_len) as i64 - gas(original_len) as i64),
-        "percent_size": (new_len as f64 / original_len as f64 - 1.0) * 100.0
+        "percent_size": (new_len as f64 / original_len as f64 - 1.0) * 100.0,
+        "unknown_opcodes_preserved": unknown_count,
+        "notes": if unknown_count > 0 {
+            "Unknown opcodes were preserved as raw bytes to maintain functionality"
+        } else {
+            "All opcodes were standard and successfully obfuscated"
+        }
     })
 }
 
@@ -208,6 +296,7 @@ mod tests {
         let report_json: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert!(report_json["original_bytes"].is_number());
         assert!(report_json["percent_size"].is_f64());
+        assert!(report_json["unknown_opcodes_preserved"].is_number());
 
         fs::remove_file(&path).unwrap();
         fs::remove_file(&temp_report).unwrap();
@@ -232,5 +321,37 @@ mod tests {
         let result = args.execute().await;
         assert!(result.is_err(), "should reject when growth > 0.01 %");
         fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_analyze_instructions() {
+        let instructions = vec![
+            Instruction {
+                pc: 0,
+                opcode: "PUSH1".to_string(),
+                imm: Some("01".to_string()),
+            },
+            Instruction {
+                pc: 2,
+                opcode: "unknown".to_string(),
+                imm: None,
+            },
+            Instruction {
+                pc: 3,
+                opcode: "UNKNOWN_0xfe".to_string(),
+                imm: None,
+            },
+            Instruction {
+                pc: 4,
+                opcode: "SSTORE".to_string(),
+                imm: None,
+            },
+        ];
+
+        let (total, unknown, types) = analyze_instructions(&instructions);
+        assert_eq!(total, 4);
+        assert_eq!(unknown, 2);
+        assert!(types.contains(&"unknown".to_string()));
+        assert!(types.contains(&"UNKNOWN_0xfe".to_string()));
     }
 }
