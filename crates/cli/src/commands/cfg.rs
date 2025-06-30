@@ -5,7 +5,7 @@
 /// generates a Graphviz .dot file representing the CFG. The output can be written to a file or
 /// printed to stdout.
 use async_trait::async_trait;
-use bytecloak_core::cfg_ir::{Block, CfgIrBundle, EdgeType, build_cfg_ir};
+use bytecloak_core::cfg_ir::{build_cfg_ir, Block, CfgIrBundle, EdgeType};
 use bytecloak_core::decoder::{decode_bytecode, input_to_bytes};
 use bytecloak_core::detection::locate_sections;
 use bytecloak_core::strip::strip_bytecode;

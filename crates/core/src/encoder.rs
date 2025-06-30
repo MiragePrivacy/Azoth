@@ -7,9 +7,9 @@
 /// auxdata) using a `CleanReport` from the `strip` module. The encoding process ensures
 /// compatibility with the opcodes defined in the `opcode` module.
 use crate::decoder::Instruction;
-use crate::opcode::Opcode;
 use crate::strip::CleanReport;
 use bytecloak_utils::errors::EncodeError;
+use eot::UnifiedOpcode;
 use hex;
 
 /// Encodes a sequence of EVM instructions into bytecode.
@@ -33,49 +33,16 @@ use hex;
 /// ```
 pub fn encode(instructions: &[Instruction]) -> Result<Vec<u8>, EncodeError> {
     let mut bytes = Vec::with_capacity(instructions.len() * 3);
+
     for ins in instructions {
-        let opcode = match ins.opcode.as_str() {
-            "PUSH1" => Opcode::PUSH(1),
-            "PUSH2" => Opcode::PUSH(2),
-            "PUSH32" => Opcode::PUSH(32),
-            "JUMPDEST" => Opcode::JUMPDEST,
-            "JUMP" => Opcode::JUMP,
-            "JUMPI" => Opcode::JUMPI,
-            "STOP" => Opcode::STOP,
-            "ADD" => Opcode::ADD,
-            "POP" => Opcode::POP,
-            "EQ" => Opcode::EQ,
-            "DUP1" => Opcode::DUP(1),
-            "DUP2" => Opcode::DUP(2),
-            "AND" => Opcode::AND,
-            "OR" => Opcode::OR,
-            "MUL" => Opcode::MUL,
-            "MSTORE" => Opcode::MSTORE,
-            "ADDRESS" => Opcode::ADDRESS,
-            "SSTORE" => Opcode::SSTORE,
-            "SUB" => Opcode::SUB,
-            "DIV" => Opcode::DIV,
-            "LT" => Opcode::LT,
-            "GT" => Opcode::GT,
-            "ISZERO" => Opcode::ISZERO,
-            "XOR" => Opcode::XOR,
-            "BALANCE" => Opcode::BALANCE,
-            "MLOAD" => Opcode::MLOAD,
-            "MSTORE8" => Opcode::MSTORE8,
-            "SLOAD" => Opcode::SLOAD,
-            "RETURN" => Opcode::RETURN,
-            "REVERT" => Opcode::REVERT,
-            "INVALID" => Opcode::INVALID,
-            "SELFDESTRUCT" => Opcode::SELFDESTRUCT,
-            "SWAP1" => Opcode::SWAP(1),
-            "SWAP2" => Opcode::SWAP(2),
-            _ => return Err(EncodeError::UnsupportedOpcode(ins.opcode.clone())),
-        };
+        // Parse opcode from string using EOT's unified interface
+        let opcode = UnifiedOpcode::from_str(&ins.opcode)
+            .map_err(|_| EncodeError::UnsupportedOpcode(ins.opcode.clone()))?;
 
         bytes.push(opcode.to_byte());
 
         // Handle immediate data for PUSH opcodes
-        if let Opcode::PUSH(n) = opcode {
+        if let UnifiedOpcode::PUSH(n) = opcode {
             if let Some(imm) = &ins.imm {
                 let imm_bytes = hex::decode(imm)?;
                 if imm_bytes.len() != n as usize {

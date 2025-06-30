@@ -1227,6 +1227,7 @@ name = "bytecloak-core"
 version = "0.1.0"
 dependencies = [
  "bytecloak-utils",
+ "eot",
  "heimdall-disassembler",
  "hex",
  "petgraph 0.8.2",
@@ -2069,6 +2070,12 @@ dependencies = [
  "sha3",
  "zeroize",
 ]
+
+[[package]]
+name = "eot"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db5dad2ebc41c786ec4aaf7294cb1669f4e4beb46a286a407e3c6d09f7a005a2"
 
 [[package]]
 name = "equivalent"

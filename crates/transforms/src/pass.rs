@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use bytecloak_analysis::{collect_metrics, compare};
 use bytecloak_core::cfg_ir::CfgIrBundle;
 use bytecloak_utils::errors::TransformError;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, SeedableRng};
 use tracing::info;
 
 /// Trait for running a sequence of obfuscation transforms on a CFG IR.

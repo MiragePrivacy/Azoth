@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use bytecloak_core::cfg_ir::{Block, CfgIrBundle};
 use bytecloak_core::decoder::Instruction;
 use bytecloak_core::encoder;
-use bytecloak_core::opcode::Opcode;
+use bytecloak_core::Opcode;
 use bytecloak_utils::errors::TransformError;
 use rand::{rngs::StdRng, seq::SliceRandom};
 use std::collections::HashMap;
@@ -115,7 +115,7 @@ impl Shuffle {
             "PUSH30" => Opcode::parse(0x7d),
             "PUSH31" => Opcode::parse(0x7e),
             "PUSH32" => Opcode::parse(0x7f),
-            _ => (Opcode::Other(0), 0),
+            _ => (Opcode::UNKNOWN(0), 0),
         };
         1 + imm_size
     }

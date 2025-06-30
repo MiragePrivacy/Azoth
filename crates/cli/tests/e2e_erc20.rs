@@ -2,8 +2,8 @@ use ethers::{
     abi::Abi,
     prelude::*,
     signers::LocalWallet,
-    types::{Address, U64, U256},
-    utils::{Anvil, hex},
+    types::{Address, U256, U64},
+    utils::{hex, Anvil},
 };
 use serde_json::Value;
 use std::fs;

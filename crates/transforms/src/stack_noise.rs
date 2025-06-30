@@ -2,9 +2,9 @@ use crate::util::{PassConfig, Transform};
 use async_trait::async_trait;
 use bytecloak_core::cfg_ir::{Block, CfgIrBundle};
 use bytecloak_core::decoder::Instruction;
-use bytecloak_core::opcode::Opcode;
+use bytecloak_core::Opcode;
 use bytecloak_utils::errors::TransformError;
-use rand::{Rng, rngs::StdRng};
+use rand::{rngs::StdRng, Rng};
 use tracing::debug;
 
 /// Adds stack manipulation noise (DUP/SWAP) to increase stack depth and potency.

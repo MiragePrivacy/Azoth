@@ -16,3 +16,4 @@ tempfile.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 petgraph.workspace = true
+eot.workspace = true

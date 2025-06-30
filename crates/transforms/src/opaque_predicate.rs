@@ -2,12 +2,12 @@ use crate::util::{PassConfig, Transform};
 use async_trait::async_trait;
 use bytecloak_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
 use bytecloak_core::decoder::Instruction;
-use bytecloak_core::opcode::Opcode;
+use bytecloak_core::Opcode;
 use bytecloak_utils::errors::TransformError;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rand::prelude::SliceRandom;
-use rand::{Rng, rngs::StdRng};
+use rand::{rngs::StdRng, Rng};
 use sha3::{Digest, Keccak256};
 use tracing::debug;
 
@@ -36,7 +36,7 @@ impl OpaquePredicate {
             "INVALID" => Opcode::INVALID,
             "JUMP" => Opcode::JUMP,
             "JUMPI" => Opcode::JUMPI,
-            _ => Opcode::Other(0),
+            _ => Opcode::UNKNOWN(0),
         })
     }
 }

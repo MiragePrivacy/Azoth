@@ -10,10 +10,11 @@ resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [workspace.dependencies]
 async-trait = "0.1.88"
+eot = { version = "0.1.1", features = ["unified-opcodes"] }
 heimdall = { git = "https://github.com/Jon-Becker/heimdall-rs", package = "heimdall-disassembler", tag = "0.8.8" }
 hex = "0.4.3"
 serde = "1.0.219"
