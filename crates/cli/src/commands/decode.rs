@@ -21,9 +21,9 @@ impl super::Command for DecodeArgs {
     async fn execute(self) -> Result<(), Box<dyn Error>> {
         let is_file = !self.input.starts_with("0x") && Path::new(&self.input).is_file();
         let (instructions, _, asm) = decode_bytecode(&self.input, is_file).await?;
-        println!("{}", asm);
+        println!("{asm}");
         for instr in instructions {
-            println!("{}", instr);
+            println!("{instr}");
         }
         Ok(())
     }

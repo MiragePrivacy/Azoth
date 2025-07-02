@@ -2,7 +2,7 @@
 /// bytecode.
 ///
 /// This module processes input bytecode, constructs a CFG, applies specified transforms (e.g.,
-/// shuffle, stack-noise, opaque-predicates), and outputs the obfuscated bytecode. It also
+/// shuffle, jump_transform, opaque-predicates), and outputs the obfuscated bytecode. It also
 /// generates a gas and size report if requested.
 use async_trait::async_trait;
 use bytecloak_core::{
@@ -32,8 +32,8 @@ pub struct ObfuscateArgs {
     /// Random seed for transform application (default: 42).
     #[arg(long, default_value_t = 42)]
     seed: u64,
-    /// Comma-separated list of transforms (default: shuffle,stack_noise,opaque_pred).
-    #[arg(long, default_value = "shuffle,stack_noise,opaque_pred")]
+    /// Comma-separated list of transforms (default: shuffle,jump_transform,opaque_pred).
+    #[arg(long, default_value = "shuffle,jump_transform,opaque_pred")]
     passes: String,
     /// Minimum quality threshold for accepting transforms (default: 0.0).
     #[arg(long, default_value_t = 0.0)]
@@ -93,13 +93,13 @@ impl super::Command for ObfuscateArgs {
             analyze_instructions(&instructions);
         if unknown_count > 0 {
             println!("Input Analysis:");
-            println!("   Total instructions: {}", total_instructions);
+            println!("Total instructions: {total_instructions}");
             println!(
                 "Unknown opcodes: {} ({:.1}%)",
                 unknown_count,
                 100.0 * unknown_count as f64 / total_instructions as f64
             );
-            println!("Unknown types found: {:?}", unknown_types);
+            println!("Unknown types found: {unknown_types:?}");
             println!("   → These will be preserved as raw bytes in the output.");
             println!("   → If the original contract works, the obfuscated version should too.");
             println!();
@@ -120,7 +120,6 @@ impl super::Command for ObfuscateArgs {
             accept_threshold: self.accept_threshold,
             aggressive: false,
             max_size_delta: self.max_size_delta,
-            max_noise_ratio: 0.5,
             max_opaque_ratio: 0.5,
         };
 
@@ -182,10 +181,7 @@ impl super::Command for ObfuscateArgs {
 
         // Success summary
         if unknown_count > 0 {
-            println!(
-                "✅ Obfuscation complete with {} unknown opcodes preserved",
-                unknown_count
-            );
+            println!("✅ Obfuscation complete with {unknown_count} unknown opcodes preserved",);
         } else {
             println!("✅ Obfuscation complete");
         }
@@ -217,17 +213,16 @@ fn build_passes(list: &str) -> Result<Vec<Box<dyn Transform>>, Box<dyn Error>> {
         .filter(|s| !s.is_empty())
         .map(|name| match name.trim() {
             "shuffle" => Ok(Box::new(bytecloak_transform::shuffle::Shuffle) as Box<dyn Transform>),
-            "stack_noise" => Ok(Box::new(bytecloak_transform::stack_noise::StackNoise::new(
-                PassConfig {
-                    max_noise_ratio: 0.5,
-                    ..Default::default()
-                },
-            )) as Box<dyn Transform>),
             "opaque_pred" | "opaque_predicate" => Ok(Box::new(
                 bytecloak_transform::opaque_predicate::OpaquePredicate::new(PassConfig {
                     max_opaque_ratio: 0.5,
                     ..Default::default()
                 }),
+            ) as Box<dyn Transform>),
+            "jump_transform" | "jump_addr" => Ok(Box::new(
+                bytecloak_transform::jump_address_transformer::JumpAddressTransformer::new(
+                    PassConfig::default(),
+                ),
             ) as Box<dyn Transform>),
             _ => Err(ObfuscateError::InvalidPass(name.to_string()).into()),
         })
@@ -281,7 +276,7 @@ mod tests {
         let args = ObfuscateArgs {
             input: path.to_str().unwrap().to_string(),
             seed: 42,
-            passes: "shuffle,stack_noise,opaque_pred".to_string(),
+            passes: "shuffle,jump_transform,opaque_pred".to_string(),
             accept_threshold: 0.0,
             max_size_delta: 10.0,
             emit: Some(temp_report.to_str().unwrap().to_string()),
@@ -300,27 +295,6 @@ mod tests {
 
         fs::remove_file(&path).unwrap();
         fs::remove_file(&temp_report).unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_obfuscate_size_limit() {
-        let input = "0x6001600155aabb"; // PUSH1 0x01, PUSH1 0x02, MSTORE, dummy auxdata
-        let dir = env::temp_dir();
-        let path = dir.join("test_obfuscate_size_limit.hex");
-        fs::write(&path, input).unwrap();
-
-        let args = ObfuscateArgs {
-            input: path.to_str().unwrap().to_string(),
-            seed: 42,
-            passes: "stack_noise".to_string(),
-            accept_threshold: 0.0,
-            max_size_delta: 0.0001,
-            emit: None,
-        };
-
-        let result = args.execute().await;
-        assert!(result.is_err(), "should reject when growth > 0.01 %");
-        fs::remove_file(&path).unwrap();
     }
 
     #[test]

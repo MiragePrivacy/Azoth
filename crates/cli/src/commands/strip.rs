@@ -36,7 +36,7 @@ impl super::Command for StripArgs {
             println!("0x{}", hex::encode(&clean_runtime));
         } else {
             let json = serde_json::to_string_pretty(&report)?;
-            println!("{}", json);
+            println!("{json}");
         }
         Ok(())
     }

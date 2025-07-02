@@ -112,7 +112,7 @@ impl Transform for OpaquePredicate {
                             original_fallthrough
                                 .map(|n| {
                                     if let Block::Body { start_pc, .. } = &ir.cfg[n] {
-                                        format!("{:x}", start_pc)
+                                        format!("{start_pc:x}")
                                     } else {
                                         "0".to_string()
                                     }
@@ -147,7 +147,7 @@ impl Transform for OpaquePredicate {
                     Instruction {
                         pc: 0,
                         opcode: Opcode::PUSH(2).to_string(),
-                        imm: Some(format!("{:x}", true_start_pc)),
+                        imm: Some(format!("{true_start_pc:x}")),
                     },
                     Instruction {
                         pc: 0,
@@ -162,7 +162,7 @@ impl Transform for OpaquePredicate {
                     Instruction {
                         pc: 0,
                         opcode: Opcode::JUMP.to_string(),
-                        imm: Some(format!("{:x}", false_start_pc)),
+                        imm: Some(format!("{false_start_pc:x}")),
                     },
                 ]);
             }

@@ -1,0 +1,12 @@
+[package]
+name = "mirage-workflow"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bytecloak-core.workspace = true
+bytecloak-transform.workspace = true
+chrono.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

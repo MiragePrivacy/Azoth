@@ -64,7 +64,7 @@ impl Transform for Shuffle {
                 if let Some(imm) = &instr.imm {
                     if let Ok(old_target) = usize::from_str_radix(imm, 16) {
                         if let Some(new_target) = pc_map.get(&old_target) {
-                            instr.imm = Some(format!("{:x}", new_target));
+                            instr.imm = Some(format!("{new_target:x}"));
                         } else {
                             return Err(TransformError::InvalidJumpTarget(old_target));
                         }

@@ -16,10 +16,13 @@ pub trait Transform: Send + Sync {
 /// Configuration for transform passes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PassConfig {
+    /// Minimum quality threshold for accepting transforms
     pub accept_threshold: f64,
+    /// Apply transforms aggressively without quality gates
     pub aggressive: bool,
+    /// Maximum allowable bytecode size increase (as ratio)
     pub max_size_delta: f32,
-    pub max_noise_ratio: f32,
+    /// Maximum ratio of blocks to apply opaque predicates to
     pub max_opaque_ratio: f32,
 }
 
@@ -28,9 +31,8 @@ impl Default for PassConfig {
         Self {
             accept_threshold: 0.0,
             aggressive: false,
-            max_size_delta: 0.05,
-            max_noise_ratio: 0.20,
-            max_opaque_ratio: 0.10,
+            max_size_delta: 0.1,   // 10% size increase limit
+            max_opaque_ratio: 0.2, // Apply to 20% of blocks max
         }
     }
 }

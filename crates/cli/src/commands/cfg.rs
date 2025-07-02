@@ -39,7 +39,7 @@ impl super::Command for CfgArgs {
         if let Some(out_path) = self.output {
             fs::write(out_path, &dot)?;
         } else {
-            println!("{}", dot);
+            println!("{dot}");
         }
         Ok(())
     }
