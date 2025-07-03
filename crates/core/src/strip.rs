@@ -15,9 +15,9 @@
 /// assert_eq!(bytes, rebuilt);
 /// ```
 use crate::detection::{Section, SectionKind};
+use bytecloak_utils::errors::StripError;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
-use thiserror::Error;
 
 /// Represents a runtime section with its original offset and length.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,17 +51,6 @@ pub struct CleanReport {
     pub clean_keccak: [u8; 32],
     /// Mapping of old PCs to new PCs after stripping.
     pub pc_map: Vec<(usize, usize)>,
-}
-
-/// Custom error type for stripping operations.
-#[derive(Debug, Error)]
-pub enum StripError {
-    #[error("section out of bounds at offset {0}")]
-    OutOfBounds(usize),
-    #[error("invalid section configuration")]
-    InvalidConfig,
-    #[error("no runtime found")]
-    NoRuntimeFound,
 }
 
 /// Strips the bytecode to extract the runtime blob and generates a report.

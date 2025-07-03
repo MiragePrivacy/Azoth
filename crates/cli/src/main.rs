@@ -6,20 +6,17 @@
 use bytecloak_cli::commands::{Cmd, Command};
 use clap::Parser;
 
-/// Command-line interface for Bytecloak.
+/// Byteckcloak CLI
 ///
 /// Bytecloak is an EVM bytecode obfuscator that supports decoding bytecode to assembly,
 /// stripping non-runtime sections, generating control flow graphs, and applying obfuscation
-/// transforms (e.g., shuffle, stack-noise, opaque-predicates).
+/// transforms
 #[derive(Parser)]
 #[command(name = "bytecloak")]
 #[command(about = "Bytecloak: EVM bytecode obfuscator")]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
-
-    /// Input bytecode as a hex string (0x...) or file path prefixed with @
-    input: String,
 }
 
 /// Runs the Bytecloak CLI with the provided arguments.
@@ -30,5 +27,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let cli = Cli::parse();
-    cli.command.execute(&cli.input).await
+    cli.command.execute().await
 }

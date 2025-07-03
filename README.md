@@ -1,24 +1,35 @@
-## bytecloak
+# Bytecloak
 
-`bytecloak` is a research‑grade toolchain for *Ethereum smart‑contract obfuscation*. Our guiding principle, is:
+**Bytecloak** is an open-source EVM‐bytecode obfuscator. Its purpose is to make Mirage’s execution contracts _statistically indistinguishable_ from the ocean of ordinary, unverified deployments on Ethereum, giving users on-chain privacy **without** the tell-tale fingerprints that mixers or shielded pools leave behind. In the process of doing this, we also raise the analytical cost of deobfuscating a single contract while keeping gas overhead and deploy size in check. Now, with this in mind, we approach this with a philosophy that says: “dissect first, disguise later”. Therefore, Bytecloak analyses a contract’s control-flow, rewrites it with deterministic layered transforms, it then re-assembles and emit a byte‑for‑byte reproducible binary.
 
-> *“Dissect first – disguise later.”*
+## Overview
+Bytecloak unfolds itself in three different stages:
 
-The project therefore unfolds in **three simple stages**:
+1. **Pre-processing**  
+   In this stage we precisely isolate/analyze the different sections of the EVM bytecode, producing a clean `runtime` blob and a typed instruction stream.
 
-| Stage                             | Goal                                                                               | What we build                                                                                                       |
-| --------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Pre‑processing / Analysis | Precisely isolate the on‑chain **runtime** bytecode and measure its structure.     | Byte‑accurate cleaner (auxdata & init stripper). Stack‑SSA IR + CFG builder. Potency/Cost metrics & JSON report |
-| Obfuscation Passes        | Apply reversible transforms that raise analyst effort while bounding gas overhead. | Control‑flow flattening. Opaque predicates. Data/constant encoders. Layout shufflers                              |
-| Re‑assembly & Validation  | Splice removed segments back, emit final artefact, run differential tests.         | Byte‑perfect re‑assembler. Dynamic equivalence harness (REVM). Gas/size delta report                              |
+2. **Obfuscation Core**  
+   The `runtime` is lifted into a `CFG + SSA` intermediate representation. Deterministic, pluggable passes then mutate the graph with different transforms. After each pass we recompute metrics; if its score does not improve the overall metrics beyond a configurable threshold the changes are rolled back.
+   
+3. **Bytecode Recovery**  
+   The encoder re-assembles the transformed runtime with the untouched constructor, aux-data, etc. producing deployable bytecode whose Keccak matches deterministic recompilation `(O(S, seed))`
 
-### overview
 
-```
-crates/
- ├─ core/       # loader + detector + strip + IR/CFG
- ├─ analysis/   # dominators, metrics, pattern miners
- ├─ transforms/ # obfuscation passes
- ├─ cli/        # `bytecloak` binary
- └─ utils/      # tracing, error, hex helpers
+### Metrics We Track
+
+* **Potency** – how much structural and statistical complexity we add (cyclomatic complexity, injected opaque instructions, etc.).  
+* **Resilience** – resistance to automated decompilation
+* **Cost** – overhead in gas and byte size.
+
+Every transform must raise Potency and Resilience above clearly defined thresholds _while keeping Cost below the defined threshold_, otherwise it is rejected.
+
+### Quick Start
+
+```bash
+cd crates/cli
+cargo install --path .
+bytecloak decode <INPUT>
+bytecloak strip <INPUT> [--raw]
+bytecloak cfg <INPUT> [-o <OUTPUT>]
+bytecloak obfuscate <INPUT> [--seed <SEED>] [--passes <PASSES>] [--accept-threshold <THRESHOLD>] [--max-size-delta <DELTA>] [--emit <PATH>]
 ```

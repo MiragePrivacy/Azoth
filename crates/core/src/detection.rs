@@ -15,8 +15,8 @@
 /// assert!(!sections.is_empty());
 /// ```
 use crate::decoder::{DecodeInfo, Instruction};
+use bytecloak_utils::errors::DetectError;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 /// Represents the type of a bytecode section.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,17 +53,6 @@ impl Section {
     pub fn end(self) -> usize {
         self.offset + self.len
     }
-}
-
-/// Custom error type for detection operations.
-#[derive(Debug, Error)]
-pub enum DetectError {
-    #[error("overlapping sections detected at offset {0}")]
-    Overlap(usize),
-    #[error("gap detected at offset {0}")]
-    Gap(usize),
-    #[error("auxdata overlap detected")]
-    AuxdataOverlap,
 }
 
 /// Locates all non-overlapping, offset-ordered sections in the bytecode.
@@ -191,6 +180,20 @@ pub fn locate_sections(
         });
     }
 
+    // Adjust runtime section to account for padding overlap
+    let sections_clone = sections.clone();
+    if let Some(rt) = sections.iter_mut().find(|s| s.kind == SectionKind::Runtime) {
+        for sec in &sections_clone {
+            if sec.kind == SectionKind::Padding
+                && sec.offset >= rt.offset
+                && sec.offset < rt.offset + rt.len
+            {
+                // Shrink runtime so it ends where padding begins
+                rt.len = sec.offset - rt.offset;
+            }
+        }
+    }
+
     // Ensure sections are non-overlapping and cover the entire range
     sections.sort_by_key(|s| s.offset);
     tracing::debug!("Sorted sections: {:?}", sections);
@@ -283,12 +286,16 @@ fn detect_auxdata(bytes: &[u8]) -> Option<(usize, usize)> {
 /// # Returns
 /// Optional tuple of (offset, length) if Padding is found, None otherwise.
 fn detect_padding(instructions: &[Instruction], aux_offset: usize) -> Option<(usize, usize)> {
-    let last_terminal = instructions.iter().rev().find(|instr| {
-        matches!(
-            instr.opcode.as_str(),
-            "STOP" | "RETURN" | "REVERT" | "INVALID" | "SELFDESTRUCT"
-        )
-    });
+    let last_terminal = instructions
+        .iter()
+        .rev()
+        .skip_while(|instr| instr.opcode == "STOP")
+        .find(|instr| {
+            matches!(
+                instr.opcode.as_str(),
+                "STOP" | "RETURN" | "REVERT" | "INVALID" | "SELFDESTRUCT"
+            )
+        });
     last_terminal.and_then(|instr| {
         let pad_offset = instr.pc + 1;
         if pad_offset < aux_offset {
@@ -360,6 +367,7 @@ fn detect_constructor_args(
 mod tests {
     use super::*;
     use crate::{decoder, decoder::SourceType};
+    use hex;
 
     #[tokio::test]
     async fn test_locate_sections_with_auxdata() {
@@ -517,6 +525,25 @@ mod tests {
             bytes.len(),
             "Sections do not cover full bytecode"
         );
+    }
+
+    #[tokio::test]
+    async fn runtime_with_trailing_zeros_is_split_properly() {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
+        let hex = "60016000f3".to_owned() + &"00".repeat(32);
+        let (instructions, info, _) = decoder::decode_bytecode(&format!("0x{}", hex), false)
+            .await
+            .unwrap();
+        let bytes = hex::decode(hex).unwrap();
+        let sections = locate_sections(&bytes, &instructions, &info).unwrap();
+        let rt = sections
+            .iter()
+            .find(|s| s.kind == SectionKind::Runtime)
+            .unwrap();
+        assert_eq!(rt.len, 5); // 5-byte program
+        assert!(sections.iter().any(|s| s.kind == SectionKind::Padding));
     }
 
     /// Validates sections for overlaps and gaps.

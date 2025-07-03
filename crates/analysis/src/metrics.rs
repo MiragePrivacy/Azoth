@@ -18,6 +18,7 @@
 /// ```
 use bytecloak_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
 use bytecloak_core::strip::CleanReport;
+use bytecloak_utils::errors::MetricsError;
 use petgraph::{
     algo::dominators::simple_fast,
     graph::{DiGraph, NodeIndex},
@@ -27,7 +28,6 @@ use petgraph::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::Hash;
-use thiserror::Error;
 
 /// Represents a set of analytical metrics for evaluating bytecode obfuscation.
 ///
@@ -48,15 +48,6 @@ pub struct Metrics {
     pub dom_overlap: f64,
     /// Composite potency score (heuristic based on nodes, edges, and overlap).
     pub potency: f64,
-}
-
-/// Error type for metrics computation.
-#[derive(Debug, Error)]
-pub enum MetricsError {
-    #[error("CFG is empty or malformed")]
-    EmptyCfg,
-    #[error("no body blocks found")]
-    NoBodyBlocks,
 }
 
 /// Collects metrics from the cleaned runtime bytecode and CFG.
@@ -232,7 +223,8 @@ pub fn compare(before: &Metrics, after: &Metrics) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytecloak_core::{cfg_ir, decoder, decoder::DecodeError, detection, strip};
+    use bytecloak_core::{cfg_ir, decoder, detection, strip};
+    use bytecloak_utils::errors::DecodeError;
     use petgraph::graph::NodeIndex;
     use tokio;
 

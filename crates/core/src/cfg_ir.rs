@@ -6,11 +6,11 @@
 /// operations, enabling analysis and obfuscation transforms (e.g., shuffle, stack-noise,
 /// opaque-predicates). The CFG is used to analyze and modify bytecode structure, ensuring
 /// accurate block splitting and edge construction based on control flow opcodes.
-use crate::decoder::{DecodeError, Instruction};
+use crate::decoder::Instruction;
 use crate::detection::Section;
+use bytecloak_utils::errors::CfgIrError;
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::{HashMap, HashSet};
-use thiserror::Error;
 
 /// Represents a node in the Control Flow Graph (CFG).
 ///
@@ -73,23 +73,6 @@ pub struct CfgIrBundle {
     pub pc_to_block: HashMap<usize, NodeIndex>,
     /// Report detailing the stripping process for bytecode reassembly.
     pub clean_report: crate::strip::CleanReport,
-}
-
-/// Error type for CFG and IR construction.
-#[derive(Debug, Error)]
-pub enum CfgIrError {
-    /// No valid entry block was found (e.g., empty instruction list).
-    #[error("no valid entry block found")]
-    NoEntryBlock,
-    /// No valid exit block was found.
-    #[error("no valid exit block found")]
-    NoExitBlock,
-    /// The instruction sequence is invalid (e.g., malformed control flow).
-    #[error("invalid instruction sequence")]
-    InvalidSequence,
-    /// Decoding error from the `decoder` module.
-    #[error("decoding error: {0}")]
-    DecodeError(#[from] DecodeError),
 }
 
 /// Builds a CFG with IR in SSA form from decoded instructions and sections.

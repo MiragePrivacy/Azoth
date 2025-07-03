@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bytecloak-utils = { path = "../utils" }
 hex.workspace = true
 heimdall.workspace = true
 serde.workspace = true
@@ -15,3 +16,4 @@ tempfile.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 petgraph.workspace = true
+eot.workspace = true

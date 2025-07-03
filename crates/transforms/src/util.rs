@@ -1,25 +1,8 @@
 use async_trait::async_trait;
 use bytecloak_core::cfg_ir::CfgIrBundle;
+use bytecloak_utils::errors::TransformError;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
-
-/// Error type for transform operations.
-#[derive(Debug, Error)]
-pub enum TransformError {
-    #[error("bytecode size exceeds maximum allowed delta")]
-    SizeLimitExceeded,
-    #[error("stack depth exceeds maximum limit of 1024")]
-    StackOverflow,
-    #[error("invalid jump target: {0}")]
-    InvalidJumpTarget(usize),
-    #[error("instruction encoding failed: {0}")]
-    EncodingError(String),
-    #[error("core operation failed")]
-    CoreError(#[from] bytecloak_core::cfg_ir::CfgIrError),
-    #[error("metrics computation failed")]
-    MetricsError(#[from] bytecloak_analysis::metrics::MetricsError),
-}
 
 /// Trait for bytecode obfuscation transforms.
 #[async_trait]
@@ -33,10 +16,13 @@ pub trait Transform: Send + Sync {
 /// Configuration for transform passes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PassConfig {
+    /// Minimum quality threshold for accepting transforms
     pub accept_threshold: f64,
+    /// Apply transforms aggressively without quality gates
     pub aggressive: bool,
+    /// Maximum allowable bytecode size increase (as ratio)
     pub max_size_delta: f32,
-    pub max_noise_ratio: f32,
+    /// Maximum ratio of blocks to apply opaque predicates to
     pub max_opaque_ratio: f32,
 }
 
@@ -45,9 +31,8 @@ impl Default for PassConfig {
         Self {
             accept_threshold: 0.0,
             aggressive: false,
-            max_size_delta: 0.05,
-            max_noise_ratio: 0.20,
-            max_opaque_ratio: 0.10,
+            max_size_delta: 0.1,   // 10% size increase limit
+            max_opaque_ratio: 0.2, // Apply to 20% of blocks max
         }
     }
 }

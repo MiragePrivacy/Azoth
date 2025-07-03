@@ -1,12 +1,13 @@
-use crate::util::{PassConfig, Transform, TransformError};
+use crate::util::{PassConfig, Transform};
 use async_trait::async_trait;
 use bytecloak_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
 use bytecloak_core::decoder::Instruction;
-use bytecloak_core::opcode::Opcode;
+use bytecloak_core::Opcode;
+use bytecloak_utils::errors::TransformError;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rand::prelude::SliceRandom;
-use rand::{Rng, rngs::StdRng};
+use rand::{rngs::StdRng, Rng};
 use sha3::{Digest, Keccak256};
 use tracing::debug;
 
@@ -35,7 +36,7 @@ impl OpaquePredicate {
             "INVALID" => Opcode::INVALID,
             "JUMP" => Opcode::JUMP,
             "JUMPI" => Opcode::JUMPI,
-            _ => Opcode::Other(0),
+            _ => Opcode::UNKNOWN(0),
         })
     }
 }
@@ -111,7 +112,7 @@ impl Transform for OpaquePredicate {
                             original_fallthrough
                                 .map(|n| {
                                     if let Block::Body { start_pc, .. } = &ir.cfg[n] {
-                                        format!("{:x}", start_pc)
+                                        format!("{start_pc:x}")
                                     } else {
                                         "0".to_string()
                                     }
@@ -146,7 +147,7 @@ impl Transform for OpaquePredicate {
                     Instruction {
                         pc: 0,
                         opcode: Opcode::PUSH(2).to_string(),
-                        imm: Some(format!("{:x}", true_start_pc)),
+                        imm: Some(format!("{true_start_pc:x}")),
                     },
                     Instruction {
                         pc: 0,
@@ -161,7 +162,7 @@ impl Transform for OpaquePredicate {
                     Instruction {
                         pc: 0,
                         opcode: Opcode::JUMP.to_string(),
-                        imm: Some(format!("{:x}", false_start_pc)),
+                        imm: Some(format!("{false_start_pc:x}")),
                     },
                 ]);
             }
