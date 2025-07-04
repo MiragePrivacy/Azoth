@@ -3,9 +3,9 @@ members = [
   "crates/analysis",
   "crates/cli",
   "crates/core",
-  "crates/examples/mirage-workflow",
   "crates/transforms", 
   "crates/utils",
+  "examples/mirage-workflow",
 ]
 resolver = "2"
 
