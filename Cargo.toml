@@ -4,7 +4,7 @@ members = [
   "crates/cli",
   "crates/core",
   "crates/transforms", 
-  "crates/utils",
+  "crates/utils", "crates/verification",
   "examples/mirage-workflow",
 ]
 resolver = "2"
@@ -34,6 +34,11 @@ rand = "0.9.1"
 anvil = "0.3.1"
 ethers = "2.0.14"
 anyhow = "1.0.98"
+revm = { version = "10", features = ["std", "serde"] }
+z3 = { version = "0.12.1" }
+bitvec = "1.0.1"
+num-bigint = { version = "0.4.6", features = ["serde"] }
+indexmap = "2.10.0"
 
 # bytecloak
 bytecloak-core = { path = "crates/core" }
