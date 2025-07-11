@@ -1,0 +1,36 @@
+[package]
+name = "bytecloak-verification"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+hex.workspace = true
+sha3.workspace = true
+anvil.workspace = true
+ethers.workspace = true
+anyhow.workspace = true
+revm.workspace = true
+z3.workspace = true
+bitvec.workspace = true
+num-bigint.workspace = true
+indexmap.workspace = true
+petgraph.workspace = true
+eot.workspace = true
+
+# bytecloak
+bytecloak-core.workspace = true
+bytecloak-utils.workspace = true
+
+[features]
+default = ["formal-verification"]
+practical-testing = []
+formal-verification = []
+anvil-testing = []
+comprehensive = ["practical-testing", "formal-verification", "anvil-testing"]

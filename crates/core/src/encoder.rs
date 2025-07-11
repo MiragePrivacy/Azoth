@@ -1,3 +1,4 @@
+use crate::Opcode;
 /// Module for encoding EVM instructions into bytecode and reassembling bytecode with
 /// non-runtime sections.
 ///
@@ -9,8 +10,8 @@
 use crate::decoder::Instruction;
 use crate::strip::CleanReport;
 use bytecloak_utils::errors::EncodeError;
-use eot::UnifiedOpcode;
 use hex;
+use std::str::FromStr;
 
 /// Encodes a sequence of EVM instructions into bytecode.
 ///
@@ -119,7 +120,7 @@ pub fn encode_with_original(
         }
 
         // Parse opcode from string using EOT's unified interface
-        let opcode = UnifiedOpcode::from_str(&ins.opcode).map_err(|e| {
+        let opcode = Opcode::from_str(&ins.opcode).map_err(|e| {
             tracing::error!(
                 "Failed to parse opcode '{}' at pc={}: {:?}",
                 ins.opcode,
@@ -137,7 +138,7 @@ pub fn encode_with_original(
         bytes.push(opcode.to_byte());
 
         // Handle immediate data for PUSH opcodes
-        if let UnifiedOpcode::PUSH(n) = opcode {
+        if let Opcode::PUSH(n) = opcode {
             if let Some(imm) = &ins.imm {
                 let imm_bytes = hex::decode(imm).inspect_err(|&e| {
                     tracing::error!(

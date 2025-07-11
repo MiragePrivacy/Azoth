@@ -10,6 +10,7 @@ use crate::decoder::Instruction;
 use crate::detection::Section;
 use bytecloak_utils::errors::CfgIrError;
 use petgraph::graph::{DiGraph, NodeIndex};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 /// Represents a node in the Control Flow Graph (CFG).
@@ -42,7 +43,7 @@ pub enum Block {
 /// Edges define the control flow between blocks, indicating how execution can transition from one
 /// block to another. Different edge types correspond to different control flow mechanisms in EVM
 /// bytecode, such as sequential execution, jumps, or conditional branches.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EdgeType {
     /// Sequential execution to the next block (e.g., after non-terminal instructions).
     Fallthrough,
