@@ -1,12 +1,11 @@
 //! Verification certificates and proof validation
 
 use crate::{
-    VerificationResult, VerificationError, TransformInfo,
-    config::VerificationConfig,
-    formal::proofs::FormalProof,
-    practical::EquivalenceResults,
+    config::VerificationConfig, formal::proofs::FormalProof, practical::EquivalenceResults,
+    TransformInfo, VerificationResult,
 };
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_256};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// A cryptographically signed certificate proving contract equivalence
@@ -122,6 +121,7 @@ pub struct ConfigSummary {
 
 impl VerificationCertificate {
     /// Create a new verification certificate
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         original_bytecode: &[u8],
         obfuscated_bytecode: &[u8],
@@ -136,11 +136,11 @@ impl VerificationCertificate {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         let original_hash = Self::compute_hash(original_bytecode);
         let obfuscated_hash = Self::compute_hash(obfuscated_bytecode);
         let certificate_id = Self::generate_certificate_id(&original_hash, &obfuscated_hash, seed);
-        
+
         // Create metadata
         let metadata = CertificateMetadata {
             version: "1.0".to_string(),
@@ -148,7 +148,7 @@ impl VerificationCertificate {
             certificate_id,
             bytecloak_version: env!("CARGO_PKG_VERSION").to_string(),
         };
-        
+
         // Create contract info
         let contracts = ContractInfo {
             original_hash,
@@ -158,33 +158,42 @@ impl VerificationCertificate {
             original_size: original_bytecode.len(),
             obfuscated_size: obfuscated_bytecode.len(),
         };
-        
+
         // Create verification results summary
-        let formal_verification = formal_proof.as_ref().map(|proof| {
-            FormalVerificationSummary {
+        let formal_verification = formal_proof
+            .as_ref()
+            .map(|proof| FormalVerificationSummary {
                 passed: proof.valid,
                 statements_proven: proof.proven_statements_count(),
                 total_statements: proof.total_statements_count(),
                 success_rate: proof.success_rate(),
                 verification_time: proof.proof_time,
                 proof_hash: proof.proof_hash.clone(),
-            }
-        });
-        
-        let practical_testing = practical_results.as_ref().map(|results| {
-            PracticalTestingSummary {
+            });
+
+        let practical_testing = practical_results
+            .as_ref()
+            .map(|results| PracticalTestingSummary {
                 passed: results.overall_passed,
                 state_equivalence: results.state_equivalence,
                 output_equivalence: results.output_equivalence,
                 event_equivalence: results.event_equivalence,
-                gas_equivalence: results.gas_equivalence.as_ref().map(|g| g.passed).unwrap_or(false),
-                max_gas_overhead: results.gas_equivalence.as_ref().map(|g| g.max_overhead_percentage).unwrap_or(0.0),
+                gas_equivalence: results
+                    .gas_equivalence
+                    .as_ref()
+                    .map(|g| g.passed)
+                    .unwrap_or(false),
+                max_gas_overhead: results
+                    .gas_equivalence
+                    .as_ref()
+                    .map(|g| g.max_overhead_percentage)
+                    .unwrap_or(0.0),
                 test_cases_executed: results.test_cases_executed.unwrap_or(0),
-            }
-        });
-        
-        let overall_passed = Self::determine_overall_result(&formal_verification, &practical_testing, config);
-        
+            });
+
+        let overall_passed =
+            Self::determine_overall_result(&formal_verification, &practical_testing, config);
+
         let results = VerificationResults {
             overall_passed,
             formal_verification,
@@ -192,7 +201,7 @@ impl VerificationCertificate {
             total_time,
             warnings: vec![], // Would be populated from verification process
         };
-        
+
         // Create config summary
         let config_summary = ConfigSummary {
             verification_level: format!("{:?}", config.verification_level),
@@ -201,7 +210,7 @@ impl VerificationCertificate {
             formal_verification_enabled: config.formal_verification_enabled,
             practical_testing_enabled: config.practical_testing_enabled,
         };
-        
+
         Ok(Self {
             metadata,
             contracts,
@@ -210,24 +219,32 @@ impl VerificationCertificate {
             signature: None, // Would be signed if crypto keys available
         })
     }
-    
+
     /// Check if overall verification passed
     pub fn overall_passed(&self) -> bool {
         self.results.overall_passed
     }
-    
+
     /// Get a summary string of the verification
     pub fn summary(&self) -> String {
-        let status = if self.overall_passed() { "PASSED" } else { "FAILED" };
-        let formal_status = self.results.formal_verification
+        let status = if self.overall_passed() {
+            "PASSED"
+        } else {
+            "FAILED"
+        };
+        let formal_status = self
+            .results
+            .formal_verification
             .as_ref()
             .map(|f| if f.passed { "PASSED" } else { "FAILED" })
             .unwrap_or("N/A");
-        let practical_status = self.results.practical_testing
+        let practical_status = self
+            .results
+            .practical_testing
             .as_ref()
             .map(|p| if p.passed { "PASSED" } else { "FAILED" })
             .unwrap_or("N/A");
-        
+
         format!(
             "Verification {} - Formal: {}, Practical: {}, Time: {:.2}s",
             status,
@@ -236,21 +253,21 @@ impl VerificationCertificate {
             self.results.total_time.as_secs_f64()
         )
     }
-    
+
     /// Save certificate to file
     pub fn save(&self, filename: &str) -> VerificationResult<()> {
         let json = serde_json::to_string_pretty(self)?;
         std::fs::write(filename, json)?;
         Ok(())
     }
-    
+
     /// Load certificate from file
     pub fn load(filename: &str) -> VerificationResult<Self> {
         let content = std::fs::read_to_string(filename)?;
         let certificate: Self = serde_json::from_str(&content)?;
         Ok(certificate)
     }
-    
+
     /// Validate certificate integrity
     pub fn validate(&self) -> VerificationResult<bool> {
         // Check timestamp is reasonable
@@ -258,45 +275,43 @@ impl VerificationCertificate {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         if self.metadata.timestamp > now {
             return Ok(false); // Future timestamp
         }
-        
+
         // Check certificate age (optional - could set expiry)
         let age_days = (now - self.metadata.timestamp) / (24 * 60 * 60);
         if age_days > 365 {
             return Ok(false); // Older than 1 year
         }
-        
+
         // Validate formal proof hash if present
         if let Some(formal) = &self.results.formal_verification {
             if formal.proof_hash.is_empty() {
                 return Ok(false);
             }
         }
-        
+
         Ok(true)
     }
-    
+
     /// Compute SHA3 hash of data
     fn compute_hash(data: &[u8]) -> String {
-        use sha3::{Digest, Sha3_256};
         let mut hasher = Sha3_256::new();
         hasher.update(data);
         hex::encode(hasher.finalize())
     }
-    
+
     /// Generate unique certificate ID
     fn generate_certificate_id(original_hash: &str, obfuscated_hash: &str, seed: u64) -> String {
-        use sha3::{Digest, Sha3_256};
         let mut hasher = Sha3_256::new();
         hasher.update(original_hash.as_bytes());
         hasher.update(obfuscated_hash.as_bytes());
-        hasher.update(&seed.to_le_bytes());
+        hasher.update(seed.to_le_bytes());
         hex::encode(&hasher.finalize()[0..16]) // First 16 bytes for shorter ID
     }
-    
+
     /// Determine overall verification result
     fn determine_overall_result(
         formal: &Option<FormalVerificationSummary>,
@@ -306,23 +321,23 @@ impl VerificationCertificate {
         match config.verification_level {
             crate::config::VerificationLevel::Quick => {
                 // Either formal OR practical passing is sufficient
-                formal.as_ref().map(|f| f.passed).unwrap_or(false) ||
-                practical.as_ref().map(|p| p.passed).unwrap_or(false)
-            },
+                formal.as_ref().map(|f| f.passed).unwrap_or(false)
+                    || practical.as_ref().map(|p| p.passed).unwrap_or(false)
+            }
             crate::config::VerificationLevel::Standard => {
                 // Require both if both are enabled
-                let formal_ok = !config.formal_verification_enabled ||
-                    formal.as_ref().map(|f| f.passed).unwrap_or(false);
-                let practical_ok = !config.practical_testing_enabled ||
-                    practical.as_ref().map(|p| p.passed).unwrap_or(false);
-                
+                let formal_ok = !config.formal_verification_enabled
+                    || formal.as_ref().map(|f| f.passed).unwrap_or(false);
+                let practical_ok = !config.practical_testing_enabled
+                    || practical.as_ref().map(|p| p.passed).unwrap_or(false);
+
                 formal_ok && practical_ok
-            },
+            }
             crate::config::VerificationLevel::Comprehensive => {
                 // Require both formal AND practical to pass
-                formal.as_ref().map(|f| f.passed).unwrap_or(false) &&
-                practical.as_ref().map(|p| p.passed).unwrap_or(false)
-            },
+                formal.as_ref().map(|f| f.passed).unwrap_or(false)
+                    && practical.as_ref().map(|p| p.passed).unwrap_or(false)
+            }
         }
     }
 }
@@ -334,14 +349,14 @@ pub type VerificationProof = VerificationCertificate;
 mod tests {
     use super::*;
     use crate::config::VerificationConfig;
-    
+
     #[test]
     fn test_certificate_creation() {
         let original = vec![0x60, 0x01];
         let obfuscated = vec![0x60, 0x01, 0x00];
         let transforms = vec![];
         let config = VerificationConfig::development();
-        
+
         let certificate = VerificationCertificate::new(
             &original,
             &obfuscated,
@@ -352,20 +367,20 @@ mod tests {
             Duration::from_secs(1),
             &config,
         );
-        
+
         assert!(certificate.is_ok());
         let cert = certificate.unwrap();
         assert!(!cert.metadata.certificate_id.is_empty());
         assert_eq!(cert.contracts.seed, 12345);
     }
-    
+
     #[test]
     fn test_certificate_validation() {
         let original = vec![0x60, 0x01];
         let obfuscated = vec![0x60, 0x01, 0x00];
         let transforms = vec![];
         let config = VerificationConfig::development();
-        
+
         let certificate = VerificationCertificate::new(
             &original,
             &obfuscated,
@@ -375,8 +390,9 @@ mod tests {
             None,
             Duration::from_secs(1),
             &config,
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         assert!(certificate.validate().unwrap());
     }
 }

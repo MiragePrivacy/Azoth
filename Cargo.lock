@@ -1334,10 +1334,12 @@ dependencies = [
  "bytecloak-core",
  "bytecloak-utils",
  "chrono",
+ "eot",
  "ethers",
  "hex",
  "indexmap",
  "num-bigint",
+ "petgraph 0.8.2",
  "revm",
  "serde",
  "serde_json",
@@ -2207,9 +2209,12 @@ dependencies = [
 
 [[package]]
 name = "eot"
-version = "0.1.3"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f68882ae868255ca621698f03d73112ce5e06648c75ab5d3cd228923a53d83c"
+checksum = "77123f7df51663615d68aa70b8387a7212969cf50b58b11b7e18ecb65954d170"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "equivalent"

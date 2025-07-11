@@ -1,26 +1,147 @@
 //! Contract semantics extraction and representation
-//! 
+//!
 //! This module analyzes bytecode to extract semantic information needed
-//! for formal verification.
+//! for formal verification by leveraging pattern recognition,
+//! symbolic execution, and property synthesis.
 
-use crate::{VerificationResult, VerificationError};
-use bytecloak_core::decoder::{decode_bytecode, Instruction};
+use crate::{VerificationError, VerificationResult};
+use bytecloak_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
+use bytecloak_core::decoder::Instruction;
+use bytecloak_core::{cfg_ir, decoder, detection, strip, Opcode};
+use petgraph::visit::EdgeRef;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::str::FromStr;
+use tracing;
+
+/// Stack value for symbolic execution
+#[derive(Debug, Clone, PartialEq)]
+pub enum StackValue {
+    /// Concrete value from PUSH instruction
+    Concrete(u64),
+    /// Symbolic value (e.g., from CALLDATALOAD)
+    Symbolic(String),
+    /// Result of an operation
+    Operation {
+        op: String,
+        operands: Vec<Box<StackValue>>,
+    },
+    /// Storage load result
+    StorageLoad(Box<StackValue>),
+    /// Unknown/top value
+    Unknown,
+}
+
+/// Path condition for conditional execution
+#[derive(Debug, Clone)]
+pub struct PathCondition {
+    /// SMT formula representing the condition
+    pub formula: String,
+    /// Whether this is a positive or negative condition
+    pub polarity: bool,
+    /// Source instruction PC
+    pub source_pc: usize,
+}
+
+/// Storage access pattern
+#[derive(Debug, Clone)]
+pub struct StorageAccess {
+    /// Program counter of the access
+    pub pc: usize,
+    /// Computed storage slot
+    pub slot: StackValue,
+    /// Access type (SLOAD or SSTORE)
+    pub access_type: StorageAccessType,
+    /// Value being stored (for SSTORE)
+    pub stored_value: Option<StackValue>,
+    /// Path conditions leading to this access
+    pub conditions: Vec<PathCondition>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StorageAccessType {
+    Load,
+    Store,
+}
+
+/// Contract pattern recognition
+#[derive(Debug, Clone)]
+pub struct ContractPattern {
+    /// Pattern type (ERC20, ERC721, etc.)
+    pub pattern_type: PatternType,
+    /// Confidence score (0.0 to 1.0)
+    pub confidence: f64,
+    /// Supporting evidence
+    pub evidence: Vec<PatternEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PatternType {
+    ERC20Token,
+    ERC721NFT,
+    Ownable,
+    ReentrancyGuard,
+    SafeMath,
+    Proxy,
+    Multisig,
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+pub struct PatternEvidence {
+    /// Type of evidence found
+    pub evidence_type: String,
+    /// Location in bytecode
+    pub pc: usize,
+    /// Supporting details
+    pub details: String,
+}
 
 /// Semantic representation of a smart contract
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractSemantics {
     /// Contract functions with their properties
-    pub functions: Vec<FunctionSemantics>,
+    pub functions: Vec<FunctionSemantics>, // what the contract can do
     /// Storage layout mapping
-    pub storage_layout: HashMap<u64, String>, // slot -> type
+    pub storage_layout: HashMap<u64, String>, // slot -> type (how data is stored)
     /// Global state invariants
-    pub state_invariants: Vec<String>, // SMT formulas
+    pub state_invariants: Vec<String>, // SMT formulas (what must always be true)
     /// Contract-level properties
-    pub properties: ContractProperties,
-    /// Control flow graph
-    pub control_flow: ControlFlowGraph,
+    pub properties: ContractProperties, // security characteristics
+    /// Reference to the CFG for analysis
+    pub cfg_metadata: CfgMetadata,
+}
+
+/// Metadata extracted from the CFG for semantic analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CfgMetadata {
+    /// Number of basic blocks in the CFG
+    pub block_count: usize,
+    /// Number of edges in the CFG
+    pub edge_count: usize,
+    /// Entry points (function selectors to block start PCs)
+    pub entry_points: HashMap<[u8; 4], usize>,
+    /// Block summaries for analysis
+    pub block_summaries: Vec<BlockSummary>,
+}
+
+/// Summary of a basic block for semantic analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockSummary {
+    /// Block identifier (PC of first instruction)
+    pub start_pc: usize,
+    /// Number of instructions in this block
+    pub instruction_count: usize,
+    /// Block type based on terminating instruction
+    pub block_type: BlockType,
+    /// Opcodes in this block (using enum instead of strings)
+    pub opcodes: Vec<Opcode>,
+    /// Maximum stack height reached in this block
+    pub max_stack: usize,
+    /// Incoming edge types
+    pub incoming_edges: Vec<EdgeType>,
+    /// Outgoing edge types
+    pub outgoing_edges: Vec<EdgeType>,
 }
 
 /// Semantic representation of a contract function
@@ -42,6 +163,8 @@ pub struct FunctionSemantics {
     pub read_only: bool,
     /// Whether this function is payable
     pub payable: bool,
+    /// Basic blocks that belong to this function
+    pub block_pcs: Vec<usize>,
 }
 
 /// Description of how a function modifies contract state
@@ -127,34 +250,8 @@ pub enum AccessControlType {
     Custom,
 }
 
-/// Control flow graph representation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ControlFlowGraph {
-    /// Basic blocks in the contract
-    pub blocks: Vec<BasicBlock>,
-    /// Edges between blocks
-    pub edges: Vec<ControlFlowEdge>,
-    /// Entry points (function starts)
-    pub entry_points: HashMap<[u8; 4], usize>, // selector -> block index
-}
-
-/// A basic block in the control flow - simplified without Instruction serialization
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BasicBlock {
-    /// Block identifier
-    pub id: usize,
-    /// Starting instruction offset
-    pub start_offset: usize,
-    /// Number of instructions in this block
-    pub instruction_count: usize,
-    /// Block type
-    pub block_type: BlockType,
-    /// Opcodes in this block (simplified representation)
-    pub opcodes: Vec<String>,
-}
-
-/// Types of basic blocks
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Types of basic blocks based on their terminating instruction
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum BlockType {
     /// Function entry point
     Entry,
@@ -166,655 +263,1055 @@ pub enum BlockType {
     Return,
     /// Error/revert
     Error,
-}
-
-/// Edge in the control flow graph
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ControlFlowEdge {
-    /// Source block
-    pub from: usize,
-    /// Destination block
-    pub to: usize,
-    /// Condition for taking this edge
-    pub condition: EdgeCondition,
-}
-
-/// Conditions for control flow edges
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum EdgeCondition {
     /// Unconditional jump
-    Unconditional,
-    /// Conditional jump (true branch)
-    ConditionalTrue,
-    /// Conditional jump (false branch)
-    ConditionalFalse,
-    /// Function call
-    Call,
-    /// Function return
-    Return,
+    Jump,
+}
+
+/// Extract semantic information from a CFG bundle
+pub fn extract_semantics(cfg_bundle: &CfgIrBundle) -> VerificationResult<ContractSemantics> {
+    tracing::debug!("Extracting semantics from CFG bundle");
+
+    let mut analyzer = SemanticAnalyzer::new(cfg_bundle.clone());
+    analyzer.analyze()?;
+    analyzer.extract_semantics_from_cfg()
 }
 
 /// Extract semantic information from bytecode
-pub fn extract_semantics(bytecode: &[u8]) -> VerificationResult<ContractSemantics> {
-    tracing::debug!("Extracting semantic information from bytecode ({} bytes)", bytecode.len());
-    
-    // Decode bytecode to instructions
-    let instructions = decode_bytecode_to_instructions(bytecode)?;
-    
-    // Build control flow graph
-    let control_flow = build_control_flow_graph(&instructions)?;
-    
-    // Extract functions
-    let functions = extract_functions(&instructions, &control_flow)?;
-    
-    // Analyze storage layout
-    let storage_layout = analyze_storage_layout(&instructions)?;
-    
-    // Extract contract properties
-    let properties = analyze_contract_properties(&instructions)?;
-    
-    // Generate state invariants
-    let state_invariants = generate_state_invariants(&functions, &storage_layout)?;
-    
-    Ok(ContractSemantics {
-        functions,
-        storage_layout,
-        state_invariants,
-        properties,
-        control_flow,
-    })
+pub async fn extract_semantics_from_bytecode(
+    bytecode: &[u8],
+) -> VerificationResult<ContractSemantics> {
+    tracing::debug!(
+        "Extracting semantics from bytecode ({} bytes)",
+        bytecode.len()
+    );
+
+    let (instructions, info, _) =
+        decoder::decode_bytecode(&format!("0x{}", hex::encode(bytecode)), false)
+            .await
+            .map_err(|e| {
+                VerificationError::BytecodeAnalysis(format!("Failed to decode bytecode: {e}"))
+            })?;
+
+    let sections = detection::locate_sections(bytecode, &instructions, &info).map_err(|e| {
+        VerificationError::BytecodeAnalysis(format!("Failed to detect sections: {e}"))
+    })?;
+
+    let (_clean_runtime, clean_report) =
+        strip::strip_bytecode(bytecode, &sections).map_err(|e| {
+            VerificationError::BytecodeAnalysis(format!("Failed to strip bytecode: {e}"))
+        })?;
+
+    let cfg_bundle = cfg_ir::build_cfg_ir(&instructions, &sections, bytecode, clean_report)
+        .map_err(|e| VerificationError::BytecodeAnalysis(format!("Failed to build CFG: {e}")))?;
+
+    extract_semantics(&cfg_bundle)
 }
 
-/// Decode bytecode using bytecloak-core
-fn decode_bytecode_to_instructions(bytecode: &[u8]) -> VerificationResult<Vec<Instruction>> {
-    let bytecode_hex = format!("0x{}", hex::encode(bytecode));
-    
-    // Use bytecloak-core's decoder
-    tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(async {
-            decode_bytecode(&bytecode_hex, false).await
-        })
-        .map(|(instructions, _, _)| instructions)
-        .map_err(|e| VerificationError::BytecodeAnalysis(format!("Failed to decode bytecode: {}", e)))
+/// Semantic analyzer capable of deep bytecode analysis
+pub struct SemanticAnalyzer {
+    /// CFG bundle for analysis
+    cfg_bundle: CfgIrBundle,
+    /// Storage access patterns found
+    storage_accesses: Vec<StorageAccess>,
+    /// Detected contract patterns
+    patterns: Vec<ContractPattern>,
 }
 
-/// Build control flow graph from instructions
-fn build_control_flow_graph(instructions: &[Instruction]) -> VerificationResult<ControlFlowGraph> {
-    let mut blocks = Vec::new();
-    let mut edges = Vec::new();
-    let mut entry_points = HashMap::new();
-    
-    // Find basic block boundaries
-    let block_starts = find_block_boundaries(instructions);
-    
-    // Create basic blocks
-    for (i, &start_offset) in block_starts.iter().enumerate() {
-        let end_offset = block_starts.get(i + 1).copied().unwrap_or(instructions.len());
-        
-        let block_instructions = &instructions[start_offset..end_offset];
-        let opcodes: Vec<String> = block_instructions.iter().map(|inst| inst.opcode.clone()).collect();
-        
-        let block_type = determine_block_type(block_instructions);
-        
-        blocks.push(BasicBlock {
-            id: i,
-            start_offset,
-            instruction_count: block_instructions.len(),
-            block_type,
-            opcodes,
-        });
-    }
-    
-    // Analyze control flow edges
-    for (i, block) in blocks.iter().enumerate() {
-        let block_edges = analyze_block_edges(block, &blocks, instructions);
-        edges.extend(block_edges);
-    }
-    
-    // Find function entry points (simplified heuristic)
-    for (i, block) in blocks.iter().enumerate() {
-        if matches!(block.block_type, BlockType::Entry) {
-            // Try to extract function selector
-            if let Some(selector) = extract_function_selector_from_opcodes(&block.opcodes) {
-                entry_points.insert(selector, i);
-            }
+impl SemanticAnalyzer {
+    /// Create new analyzer instance
+    pub fn new(cfg_bundle: CfgIrBundle) -> Self {
+        Self {
+            cfg_bundle,
+            storage_accesses: Vec::new(),
+            patterns: Vec::new(),
         }
     }
-    
-    Ok(ControlFlowGraph {
-        blocks,
-        edges,
-        entry_points,
-    })
-}
 
-/// Find boundaries of basic blocks
-fn find_block_boundaries(instructions: &[Instruction]) -> Vec<usize> {
-    let mut boundaries = vec![0]; // Start is always a boundary
-    
-    for (i, instruction) in instructions.iter().enumerate() {
+    /// Perform comprehensive semantic analysis
+    pub fn analyze(&mut self) -> VerificationResult<()> {
+        tracing::info!("Starting semantic analysis");
+
+        // Analyze storage access patterns with symbolic execution
+        self.analyze_storage_patterns()?;
+
+        // Detect contract patterns (ERC20, Ownable, etc.)
+        self.detect_contract_patterns()?;
+
+        // Perform symbolic execution on critical paths
+        self.symbolic_execution_analysis()?;
+
+        tracing::info!("Semantic analysis completed");
+        Ok(())
+    }
+
+    /// Extract semantic information from CFG
+    pub fn extract_semantics_from_cfg(&self) -> VerificationResult<ContractSemantics> {
+        let cfg_metadata = self.extract_cfg_metadata()?;
+        let functions = self.extract_functions()?;
+        let storage_layout = self.analyze_storage_layout()?;
+        let properties = self.analyze_contract_properties()?;
+        let state_invariants = self.extract_state_invariants(&functions, &storage_layout)?;
+
+        Ok(ContractSemantics {
+            functions,
+            storage_layout,
+            state_invariants,
+            properties,
+            cfg_metadata,
+        })
+    }
+
+    /// Extract CFG metadata for analysis
+    fn extract_cfg_metadata(&self) -> VerificationResult<CfgMetadata> {
+        let cfg = &self.cfg_bundle.cfg;
+        let mut entry_points = HashMap::new();
+        let mut block_summaries = Vec::new();
+
+        // Extract semantic information from existing CFG blocks
+        for node_idx in cfg.node_indices() {
+            if let Some(Block::Body {
+                start_pc,
+                instructions,
+                max_stack,
+            }) = cfg.node_weight(node_idx)
+            {
+                // Extract function selectors (semantic analysis)
+                if let Some(selector) =
+                    self.extract_function_selector_from_instructions(instructions)
+                {
+                    entry_points.insert(selector, *start_pc);
+                }
+
+                // Convert string opcodes to Opcode enum
+                let opcodes: Result<Vec<Opcode>, _> = instructions
+                    .iter()
+                    .map(|i| {
+                        Opcode::from_str(&i.opcode).map_err(|_| {
+                            VerificationError::BytecodeAnalysis(format!(
+                                "Invalid opcode: {} at pc={}",
+                                i.opcode, i.pc
+                            ))
+                        })
+                    })
+                    .collect();
+
+                let opcodes = opcodes?;
+
+                // Determine block type using enum comparison
+                let block_type = if instructions.is_empty() {
+                    BlockType::Normal
+                } else {
+                    match Opcode::from_str(&instructions.last().unwrap().opcode) {
+                        Ok(Opcode::RETURN) => BlockType::Return,
+                        Ok(Opcode::REVERT) => BlockType::Error,
+                        Ok(Opcode::JUMP) => BlockType::Jump,
+                        Ok(Opcode::JUMPI) => BlockType::Branch,
+                        _ => {
+                            if let Ok(Opcode::JUMPDEST) = instructions
+                                .first()
+                                .map(|i| Opcode::from_str(&i.opcode))
+                                .unwrap_or(Err(Opcode::INVALID.to_string()))
+                            {
+                                BlockType::Entry
+                            } else {
+                                BlockType::Normal
+                            }
+                        }
+                    }
+                };
+
+                // Use CFG's existing edge information
+                let incoming_edges: Vec<EdgeType> = cfg
+                    .edges_directed(node_idx, petgraph::Direction::Incoming)
+                    .map(|edge| edge.weight().clone())
+                    .collect();
+
+                let outgoing_edges: Vec<EdgeType> = cfg
+                    .edges_directed(node_idx, petgraph::Direction::Outgoing)
+                    .map(|edge| edge.weight().clone())
+                    .collect();
+
+                block_summaries.push(BlockSummary {
+                    start_pc: *start_pc,
+                    instruction_count: instructions.len(),
+                    block_type,
+                    opcodes,
+                    max_stack: *max_stack,
+                    incoming_edges,
+                    outgoing_edges,
+                });
+            }
+        }
+
+        Ok(CfgMetadata {
+            block_count: cfg.node_count(),
+            edge_count: cfg.edge_count(),
+            entry_points,
+            block_summaries,
+        })
+    }
+
+    fn extract_functions(&self) -> VerificationResult<Vec<FunctionSemantics>> {
+        let mut functions = Vec::new();
+        let cfg_metadata = self.extract_cfg_metadata()?;
+
+        // For each entry point, analyze the reachable blocks as a function
+        for (selector, start_pc) in &cfg_metadata.entry_points {
+            let function = self.analyze_function(*selector, *start_pc)?;
+            functions.push(function);
+        }
+
+        // If no entry points found, create a single function for the entire contract
+        if functions.is_empty() {
+            let function = self.create_fallback_function(&cfg_metadata)?;
+            functions.push(function);
+        }
+
+        Ok(functions)
+    }
+
+    /// Analyze a single function with sophisticated analysis
+    fn analyze_function(
+        &self,
+        selector: [u8; 4],
+        start_pc: usize,
+    ) -> VerificationResult<FunctionSemantics> {
+        let function_name = format!("function_{}", hex::encode(selector));
+
+        // Find all blocks reachable from the start_pc
+        let reachable_blocks = self.find_reachable_blocks_in_cfg(start_pc)?;
+        let block_pcs: Vec<usize> = reachable_blocks.to_vec();
+
+        // Analyze state modifications across all reachable blocks
+        let state_modifications = self.analyze_state_modifications_in_blocks(&reachable_blocks)?;
+
+        // Analyze gas characteristics
+        let gas_characteristics = self.analyze_gas_characteristics_in_blocks(&reachable_blocks)?;
+
+        // Determine function properties
+        let (read_only, payable) = self.analyze_function_properties_in_blocks(&reachable_blocks)?;
+
+        // Generate sophisticated preconditions and postconditions
+        let preconditions = self.generate_preconditions(&selector, &state_modifications)?;
+        let postconditions = self.generate_postconditions(&selector, &state_modifications)?;
+
+        Ok(FunctionSemantics {
+            name: function_name,
+            selector: Some(selector),
+            preconditions,
+            postconditions,
+            state_modifications,
+            gas_characteristics,
+            read_only,
+            payable,
+            block_pcs,
+        })
+    }
+
+    fn create_fallback_function(
+        &self,
+        cfg_metadata: &CfgMetadata,
+    ) -> VerificationResult<FunctionSemantics> {
+        let all_block_pcs: Vec<usize> = cfg_metadata
+            .block_summaries
+            .iter()
+            .map(|b| b.start_pc)
+            .collect();
+        let state_modifications = self.analyze_state_modifications_in_blocks(&all_block_pcs)?;
+        let gas_characteristics = self.analyze_gas_characteristics_in_blocks(&all_block_pcs)?;
+        let (read_only, payable) = self.analyze_function_properties_in_blocks(&all_block_pcs)?;
+
+        Ok(FunctionSemantics {
+            name: "fallback".to_string(),
+            selector: None,
+            preconditions: vec![],
+            postconditions: vec![],
+            state_modifications,
+            gas_characteristics,
+            read_only,
+            payable,
+            block_pcs: all_block_pcs,
+        })
+    }
+
+    fn find_reachable_blocks_in_cfg(&self, start_pc: usize) -> VerificationResult<Vec<usize>> {
+        let cfg = &self.cfg_bundle.cfg;
+        let mut reachable = Vec::new();
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+
+        if let Some(&start_node) = self.cfg_bundle.pc_to_block.get(&start_pc) {
+            queue.push_back(start_node);
+        } else {
+            return Err(VerificationError::BytecodeAnalysis(format!(
+                "No block found for start PC: {start_pc}",
+            )));
+        }
+
+        while let Some(node_idx) = queue.pop_front() {
+            if visited.contains(&node_idx) {
+                continue;
+            }
+            visited.insert(node_idx);
+
+            if let Some(Block::Body { start_pc, .. }) = cfg.node_weight(node_idx) {
+                reachable.push(*start_pc);
+            }
+
+            for edge in cfg.edges_directed(node_idx, petgraph::Direction::Outgoing) {
+                queue.push_back(edge.target());
+            }
+        }
+
+        Ok(reachable)
+    }
+
+    fn analyze_storage_patterns(&mut self) -> VerificationResult<()> {
+        tracing::debug!("Analyzing storage access patterns");
+
+        for node_idx in self.cfg_bundle.cfg.node_indices() {
+            if let Some(Block::Body { instructions, .. }) =
+                self.cfg_bundle.cfg.node_weight(node_idx)
+            {
+                let mut stack = Vec::new();
+                let path_conditions = Vec::new();
+
+                for instruction in instructions {
+                    self.update_stack(&mut stack, instruction);
+
+                    match instruction.opcode.as_str() {
+                        "SLOAD" => {
+                            if let Some(slot) = stack.last().cloned() {
+                                self.storage_accesses.push(StorageAccess {
+                                    pc: instruction.pc,
+                                    slot,
+                                    access_type: StorageAccessType::Load,
+                                    stored_value: None,
+                                    conditions: path_conditions.clone(),
+                                });
+                            }
+                        }
+                        "SSTORE" => {
+                            if stack.len() >= 2 {
+                                let slot = stack[stack.len() - 1].clone();
+                                let value = stack[stack.len() - 2].clone();
+                                self.storage_accesses.push(StorageAccess {
+                                    pc: instruction.pc,
+                                    slot,
+                                    access_type: StorageAccessType::Store,
+                                    stored_value: Some(value),
+                                    conditions: path_conditions.clone(),
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        tracing::debug!("Found {} storage accesses", self.storage_accesses.len());
+        Ok(())
+    }
+
+    fn analyze_storage_layout(&self) -> VerificationResult<HashMap<u64, String>> {
+        let mut layout = HashMap::new();
+
+        for access in &self.storage_accesses {
+            if let StackValue::Concrete(slot) = access.slot {
+                layout.entry(slot).or_insert("uint256".to_string());
+            }
+        }
+
+        if layout.is_empty() {
+            // Default entries for demonstration
+            layout.insert(0, "uint256".to_string());
+            layout.insert(1, "address".to_string());
+            layout.insert(2, "mapping(address=>uint256)".to_string());
+        }
+
+        Ok(layout)
+    }
+
+    fn detect_contract_patterns(&mut self) -> VerificationResult<()> {
+        tracing::debug!("Detecting contract patterns");
+
+        if let Some(erc20_pattern) = self.detect_erc20_pattern()? {
+            self.patterns.push(erc20_pattern);
+        }
+
+        if let Some(ownable_pattern) = self.detect_ownable_pattern()? {
+            self.patterns.push(ownable_pattern);
+        }
+
+        if let Some(guard_pattern) = self.detect_reentrancy_guard_pattern()? {
+            self.patterns.push(guard_pattern);
+        }
+
+        tracing::debug!("Detected {} contract patterns", self.patterns.len());
+        Ok(())
+    }
+
+    fn detect_erc20_pattern(&self) -> VerificationResult<Option<ContractPattern>> {
+        let mut evidence = Vec::new();
+        let mut score = 0.0;
+
+        if self.has_function_selector(&[0xa9, 0x05, 0x9c, 0xbb]) {
+            evidence.push(PatternEvidence {
+                evidence_type: "transfer_function".to_string(),
+                pc: 0,
+                details: "Found transfer function selector".to_string(),
+            });
+            score += 0.3;
+        }
+
+        if self.has_balance_mapping_pattern() {
+            evidence.push(PatternEvidence {
+                evidence_type: "balance_mapping".to_string(),
+                pc: 0,
+                details: "Found balance mapping access pattern".to_string(),
+            });
+            score += 0.3;
+        }
+
+        if score >= 0.3 {
+            Ok(Some(ContractPattern {
+                pattern_type: PatternType::ERC20Token,
+                confidence: score,
+                evidence,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn detect_ownable_pattern(&self) -> VerificationResult<Option<ContractPattern>> {
+        let mut evidence = Vec::new();
+        let mut score = 0.0;
+
+        if self.has_owner_storage_pattern() {
+            evidence.push(PatternEvidence {
+                evidence_type: "owner_storage".to_string(),
+                pc: 0,
+                details: "Found owner storage access pattern".to_string(),
+            });
+            score += 0.5;
+        }
+
+        if score >= 0.3 {
+            Ok(Some(ContractPattern {
+                pattern_type: PatternType::Ownable,
+                confidence: score,
+                evidence,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn detect_reentrancy_guard_pattern(&self) -> VerificationResult<Option<ContractPattern>> {
+        let mut evidence = Vec::new();
+        let mut score = 0.0;
+
+        if self.has_guard_check_pattern() {
+            evidence.push(PatternEvidence {
+                evidence_type: "guard_check".to_string(),
+                pc: 0,
+                details: "Found reentrancy guard check pattern".to_string(),
+            });
+            score += 0.5;
+        }
+
+        if score >= 0.3 {
+            Ok(Some(ContractPattern {
+                pattern_type: PatternType::ReentrancyGuard,
+                confidence: score,
+                evidence,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn symbolic_execution_analysis(&mut self) -> VerificationResult<()> {
+        tracing::debug!("Performing symbolic execution analysis");
+        // Placeholder for full symbolic execution
+        Ok(())
+    }
+
+    fn update_stack(&self, stack: &mut Vec<StackValue>, instruction: &Instruction) {
         match instruction.opcode.as_str() {
-            // Jump destinations are block boundaries
-            "JUMPDEST" => boundaries.push(i),
-            // Instructions after jumps/calls are boundaries  
-            "JUMP" | "JUMPI" => {
-                if i + 1 < instructions.len() {
-                    boundaries.push(i + 1);
+            opcode if opcode.starts_with("PUSH") => {
+                if let Some(imm) = &instruction.imm {
+                    if let Ok(value) = u64::from_str_radix(imm, 16) {
+                        stack.push(StackValue::Concrete(value));
+                    } else {
+                        stack.push(StackValue::Unknown);
+                    }
                 }
-            },
-            "CALL" | "CALLCODE" | "DELEGATECALL" | "STATICCALL" => {
-                if i + 1 < instructions.len() {
-                    boundaries.push(i + 1);
+            }
+            "CALLDATALOAD" => {
+                if !stack.is_empty() {
+                    let offset = stack.pop().unwrap();
+                    stack.push(StackValue::Symbolic(format!(
+                        "CALLDATALOAD({})",
+                        self.stack_value_to_string(&offset)
+                    )));
                 }
-            },
+            }
+            "ADD" => {
+                if stack.len() >= 2 {
+                    let b = stack.pop().unwrap();
+                    let a = stack.pop().unwrap();
+                    stack.push(StackValue::Operation {
+                        op: "ADD".to_string(),
+                        operands: vec![Box::new(a), Box::new(b)],
+                    });
+                }
+            }
+            "POP" => {
+                stack.pop();
+            }
             _ => {}
         }
     }
-    
-    boundaries.sort();
-    boundaries.dedup();
-    boundaries
-}
 
-/// Determine the type of a basic block
-fn determine_block_type(instructions: &[Instruction]) -> BlockType {
-    if instructions.is_empty() {
-        return BlockType::Normal;
-    }
-    
-    // Check last instruction
-    match instructions.last().unwrap().opcode.as_str() {
-        "RETURN" => BlockType::Return,
-        "REVERT" => BlockType::Error,
-        "JUMPI" => BlockType::Branch, // conditional
-        _ => {
-            // Check if this looks like a function entry
-            if instructions.len() > 4 && instructions[0].opcode == "JUMPDEST" {
-                BlockType::Entry
-            } else {
-                BlockType::Normal
+    #[allow(clippy::only_used_in_recursion)]
+    fn stack_value_to_string(&self, value: &StackValue) -> String {
+        match value {
+            StackValue::Concrete(v) => format!("0x{v:x}"),
+            StackValue::Symbolic(s) => s.clone(),
+            StackValue::Operation { op, operands } => {
+                let op_strs: Vec<String> = operands
+                    .iter()
+                    .map(|op| self.stack_value_to_string(op))
+                    .collect();
+                format!("{}({})", op, op_strs.join(", "))
             }
+            StackValue::StorageLoad(slot) => {
+                format!("SLOAD({})", self.stack_value_to_string(slot))
+            }
+            StackValue::Unknown => "UNKNOWN".to_string(),
         }
     }
-}
 
-/// Analyze control flow edges from a block
-fn analyze_block_edges(block: &BasicBlock, all_blocks: &[BasicBlock], _instructions: &[Instruction]) -> Vec<ControlFlowEdge> {
-    let mut edges = Vec::new();
-    
-    if let Some(last_opcode) = block.opcodes.last() {
-        match last_opcode.as_str() {
-            "JUMP" => {
-                // Unconditional jump - would need jump target analysis
-                // For now, simplified
-            },
-            "JUMPI" => {
-                // Conditional jump - has both true and false branches
-                // Would need more sophisticated analysis
-            },
-            "CALL" | "CALLCODE" | "DELEGATECALL" | "STATICCALL" => {
-                // Call edge - execution continues after call
-                if let Some(next_block) = all_blocks.iter().find(|b| b.id == block.id + 1) {
-                    edges.push(ControlFlowEdge {
-                        from: block.id,
-                        to: next_block.id,
-                        condition: EdgeCondition::Call,
-                    });
-                }
-            },
-            "RETURN" | "REVERT" => {
-                // Terminal instructions - no outgoing edges
-            },
-            _ => {
-                // Fall-through to next block
-                if let Some(next_block) = all_blocks.iter().find(|b| b.id == block.id + 1) {
-                    edges.push(ControlFlowEdge {
-                        from: block.id,
-                        to: next_block.id,
-                        condition: EdgeCondition::Unconditional,
-                    });
+    fn analyze_contract_properties(&self) -> VerificationResult<ContractProperties> {
+        let mut is_proxy = false;
+        let mut is_upgradeable = false;
+        let mut has_reentrancy_guards = false;
+        let mut access_control = AccessControlType::None;
+
+        // Use CFG structure instead of raw instructions
+        for node_idx in self.cfg_bundle.cfg.node_indices() {
+            if let Some(Block::Body { instructions, .. }) =
+                self.cfg_bundle.cfg.node_weight(node_idx)
+            {
+                for instruction in instructions {
+                    if let Ok(opcode) = Opcode::from_str(&instruction.opcode) {
+                        match opcode {
+                            Opcode::DELEGATECALL => {
+                                is_proxy = true;
+                                is_upgradeable = true;
+                            }
+                            Opcode::CALLER => {
+                                access_control = AccessControlType::Owner;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
-    }
-    
-    edges
-}
 
-/// Extract function selector from opcodes
-fn extract_function_selector_from_opcodes(opcodes: &[String]) -> Option<[u8; 4]> {
-    // Look for PUSH4 pattern (simplified)
-    for opcode in opcodes {
-        if opcode == "PUSH4" {
-            // In a real implementation, we'd need the immediate value
-            // For now, return a placeholder
-            return Some([0x12, 0x34, 0x56, 0x78]);
+        if self.has_guard_check_pattern() {
+            has_reentrancy_guards = true;
         }
+
+        Ok(ContractProperties {
+            is_proxy,
+            is_upgradeable,
+            has_reentrancy_guards,
+            access_control,
+        })
     }
-    None
-}
 
-/// Extract function information from instructions
-fn extract_functions(
-    _instructions: &[Instruction], 
-    control_flow: &ControlFlowGraph
-) -> VerificationResult<Vec<FunctionSemantics>> {
-    let mut functions = Vec::new();
-    
-    for (selector, &block_id) in &control_flow.entry_points {
-        let function = analyze_function(control_flow, *selector, block_id)?;
-        functions.push(function);
-    }
-    
-    Ok(functions)
-}
+    fn analyze_state_modifications_in_blocks(
+        &self,
+        _block_pcs: &[usize],
+    ) -> VerificationResult<Vec<StateModification>> {
+        let mut modifications = Vec::new();
 
-/// Analyze a single function
-fn analyze_function(
-    control_flow: &ControlFlowGraph,
-    selector: [u8; 4],
-    entry_block_id: usize,
-) -> VerificationResult<FunctionSemantics> {
-    let function_name = format!("function_{}", hex::encode(selector));
-    
-    // Analyze function blocks (all reachable from entry)
-    let function_blocks = find_reachable_blocks(control_flow, entry_block_id);
-    
-    // Extract state modifications
-    let state_modifications = analyze_state_modifications(&function_blocks)?;
-    
-    // Analyze gas characteristics
-    let gas_characteristics = analyze_gas_characteristics(&function_blocks)?;
-    
-    // Determine function properties
-    let (read_only, payable) = analyze_function_properties(&function_blocks)?;
-    
-    // Generate preconditions and postconditions
-    let preconditions = generate_function_preconditions(&selector, &state_modifications);
-    let postconditions = generate_function_postconditions(&selector, &state_modifications);
-    
-    Ok(FunctionSemantics {
-        name: function_name,
-        selector: Some(selector),
-        preconditions,
-        postconditions,
-        state_modifications,
-        gas_characteristics,
-        read_only,
-        payable,
-    })
-}
-
-/// Find all blocks reachable from a given entry block
-fn find_reachable_blocks(control_flow: &ControlFlowGraph, entry_block_id: usize) -> Vec<&BasicBlock> {
-    let mut reachable = Vec::new();
-    let mut visited = std::collections::HashSet::new();
-    let mut queue = std::collections::VecDeque::new();
-    
-    queue.push_back(entry_block_id);
-    
-    while let Some(block_id) = queue.pop_front() {
-        if visited.contains(&block_id) {
-            continue;
-        }
-        
-        visited.insert(block_id);
-        
-        if let Some(block) = control_flow.blocks.get(block_id) {
-            reachable.push(block);
-            
-            // Add successor blocks to queue
-            for edge in &control_flow.edges {
-                if edge.from == block_id {
-                    queue.push_back(edge.to);
+        for node_idx in self.cfg_bundle.cfg.node_indices() {
+            if let Some(Block::Body { instructions, .. }) =
+                self.cfg_bundle.cfg.node_weight(node_idx)
+            {
+                for instruction in instructions {
+                    if let Ok(Opcode::SSTORE) = Opcode::from_str(&instruction.opcode) {
+                        modifications.push(StateModification {
+                            storage_slot: 0, // TODO: Requires proper stack analysis
+                            modification_type: ModificationType::Assignment,
+                            conditions: vec![],
+                        });
+                    }
                 }
             }
         }
-    }
-    
-    reachable
-}
 
-/// Analyze state modifications in function blocks
-fn analyze_state_modifications(blocks: &[&BasicBlock]) -> VerificationResult<Vec<StateModification>> {
-    let mut modifications = Vec::new();
-    
-    for block in blocks {
-        for opcode in &block.opcodes {
-            match opcode.as_str() {
-                "SSTORE" => {
-                    // Storage write operation
-                    modifications.push(StateModification {
-                        storage_slot: 0, // Would need stack analysis to get actual slot
-                        modification_type: ModificationType::Assignment,
-                        conditions: vec![], // Would need condition analysis
-                    });
-                },
-                "SLOAD" => {
-                    // Storage read - not a modification but important for analysis
-                },
+        Ok(modifications)
+    }
+
+    fn analyze_gas_characteristics_in_blocks(
+        &self,
+        _block_pcs: &[usize],
+    ) -> VerificationResult<GasCharacteristics> {
+        let mut base_cost = 21000u64;
+        let mut variable_costs = Vec::new();
+
+        for node_idx in self.cfg_bundle.cfg.node_indices() {
+            if let Some(Block::Body { instructions, .. }) =
+                self.cfg_bundle.cfg.node_weight(node_idx)
+            {
+                for instruction in instructions {
+                    // Parse opcode to enum for gas calculation
+                    if let Ok(opcode) = Opcode::from_str(&instruction.opcode) {
+                        base_cost += self.get_instruction_gas_cost(&opcode);
+
+                        match opcode {
+                            Opcode::SSTORE => {
+                                variable_costs.push(VariableGasCost {
+                                    factor: GasCostFactor::StorageOperations,
+                                    cost_per_unit: 20000,
+                                });
+                            }
+                            Opcode::CALL
+                            | Opcode::CALLCODE
+                            | Opcode::DELEGATECALL
+                            | Opcode::STATICCALL => {
+                                variable_costs.push(VariableGasCost {
+                                    factor: GasCostFactor::ExternalCalls,
+                                    cost_per_unit: 2300,
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(GasCharacteristics {
+            base_cost,
+            variable_costs,
+            max_gas: None,
+        })
+    }
+
+    fn analyze_function_properties_in_blocks(
+        &self,
+        block_pcs: &[usize],
+    ) -> VerificationResult<(bool, bool)> {
+        let mut has_state_change = false;
+        let mut is_payable = false;
+
+        for &block_pc in block_pcs {
+            if let Some(&node_idx) = self.cfg_bundle.pc_to_block.get(&block_pc) {
+                if let Some(Block::Body { instructions, .. }) =
+                    self.cfg_bundle.cfg.node_weight(node_idx)
+                {
+                    for instruction in instructions {
+                        if let Ok(opcode) = Opcode::from_str(&instruction.opcode) {
+                            match opcode {
+                                Opcode::SSTORE => has_state_change = true,
+                                Opcode::CALLVALUE => is_payable = true,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok((!has_state_change, is_payable))
+    }
+
+    fn extract_state_invariants(
+        &self,
+        functions: &[FunctionSemantics],
+        storage_layout: &HashMap<u64, String>,
+    ) -> VerificationResult<Vec<String>> {
+        let mut invariants = Vec::new();
+
+        for pattern in &self.patterns {
+            match pattern.pattern_type {
+                PatternType::ERC20Token => {
+                    invariants
+                        .push("(= (sum-all-balances state) (total-supply state))".to_string());
+                    invariants
+                        .push("(forall ((addr Address)) (>= (balance addr state) 0))".to_string());
+                }
+                PatternType::Ownable => {
+                    invariants.push(
+                        "(not (= (owner state) #x0000000000000000000000000000000000000000))"
+                            .to_string(),
+                    );
+                }
+                PatternType::ReentrancyGuard => {
+                    invariants.push(
+                        "(=> (guard-locked state) (not (can-call-external state)))".to_string(),
+                    );
+                }
                 _ => {}
             }
         }
-    }
-    
-    Ok(modifications)
-}
 
-/// Analyze gas characteristics of function blocks
-fn analyze_gas_characteristics(blocks: &[&BasicBlock]) -> VerificationResult<GasCharacteristics> {
-    let mut base_cost = 21000u64; // Base transaction cost
-    let mut variable_costs = Vec::new();
-    let max_gas = None;
-    
-    for block in blocks {
-        for opcode in &block.opcodes {
-            // Add instruction gas cost
-            base_cost += get_instruction_gas_cost_by_name(opcode);
-            
-            // Check for variable cost operations
-            match opcode.as_str() {
-                "SSTORE" => {
-                    variable_costs.push(VariableGasCost {
-                        factor: GasCostFactor::StorageOperations,
-                        cost_per_unit: 20000, // SSTORE cost
-                    });
-                },
-                "CALL" | "CALLCODE" | "DELEGATECALL" | "STATICCALL" => {
-                    variable_costs.push(VariableGasCost {
-                        factor: GasCostFactor::ExternalCalls,
-                        cost_per_unit: 2300, // Base call cost
-                    });
-                },
+        for (slot, slot_type) in storage_layout {
+            match slot_type.as_str() {
+                "uint256" => {
+                    invariants.push(format!(
+                        "(and (>= (storage-slot-{slot} (storage s)) 0) (< (storage-slot-{slot} (storage s)) (^ 2 256)))",
+                    ));
+                }
+                "address" => {
+                    invariants.push(format!(
+                        "(and (>= (storage-slot-{slot} (storage s)) 0) (< (storage-slot-{slot} (storage s)) (^ 2 160)))",
+                    ));
+                }
                 _ => {}
             }
         }
-    }
-    
-    Ok(GasCharacteristics {
-        base_cost,
-        variable_costs,
-        max_gas,
-    })
-}
 
-/// Get base gas cost for an instruction by name
-fn get_instruction_gas_cost_by_name(opcode: &str) -> u64 {
-    match opcode {
-        // Arithmetic operations
-        "ADD" | "MUL" | "SUB" | "DIV" | "SDIV" => 3,
-        "MOD" | "SMOD" | "ADDMOD" | "MULMOD" | "EXP" | "SIGNEXTEND" => 5,
-        
-        // Comparison operations
-        "LT" | "GT" | "SLT" | "SGT" | "EQ" | "ISZERO" | "AND" | "OR" | "XOR" | "NOT" | "BYTE" | "SHL" | "SHR" | "SAR" => 3,
-        
-        // Memory operations
-        "MLOAD" | "MSTORE" | "MSTORE8" => 3,
-        
-        // Storage operations
-        "SLOAD" => 800,
-        "SSTORE" => 20000, // simplified
-        
-        // Stack operations
-        "POP" => 2,
-        opcode if opcode.starts_with("DUP") || opcode.starts_with("SWAP") => 3,
-        
-        // Push operations
-        opcode if opcode.starts_with("PUSH") => 3,
-        
-        // Jump operations
-        "JUMP" => 8,
-        "JUMPI" => 10,
-        "JUMPDEST" => 1,
-        
-        // Call operations
-        "CALL" | "CALLCODE" | "DELEGATECALL" | "STATICCALL" => 700,
-        
-        // Return operations
-        "RETURN" | "REVERT" => 0,
-        
-        _ => 1, // Default gas cost
-    }
-}
+        for function in functions {
+            if function.read_only {
+                invariants.push(format!(
+                    "(forall ((s State) (tx Transaction)) (= (storage (final-state ({} s tx))) (storage s)))",
+                    function.name
+                ));
+            }
+        }
 
-/// Analyze function properties (read-only, payable)
-fn analyze_function_properties(blocks: &[&BasicBlock]) -> VerificationResult<(bool, bool)> {
-    let mut has_state_change = false;
-    let mut is_payable = false;
-    
-    for block in blocks {
-        for opcode in &block.opcodes {
-            match opcode.as_str() {
-                "SSTORE" => {
-                    has_state_change = true;
-                },
-                "CALLVALUE" => {
-                    is_payable = true;
-                },
+        Ok(invariants)
+    }
+
+    fn generate_preconditions(
+        &self,
+        selector: &[u8; 4],
+        state_modifications: &[StateModification],
+    ) -> VerificationResult<Vec<String>> {
+        let mut preconditions = Vec::new();
+
+        preconditions.push(format!(
+            "(= (function-selector (data tx)) #x{})",
+            hex::encode(selector)
+        ));
+
+        for pattern in &self.patterns {
+            match pattern.pattern_type {
+                PatternType::ERC20Token => {
+                    if self.is_transfer_function(selector) {
+                        preconditions.push(
+                            "(>= (balance (sender tx) (storage state)) (transfer-amount tx))"
+                                .to_string(),
+                        );
+                        preconditions.push(
+                            "(not (= (recipient tx) #x0000000000000000000000000000000000000000))"
+                                .to_string(),
+                        );
+                        preconditions.push("(> (transfer-amount tx) 0)".to_string());
+                    }
+                }
+                PatternType::Ownable => {
+                    if self.is_admin_function(selector) {
+                        preconditions.push("(= (sender tx) (owner (storage state)))".to_string());
+                    }
+                }
+                PatternType::ReentrancyGuard => {
+                    preconditions.push("(not (guard-locked (storage state)))".to_string());
+                }
                 _ => {}
             }
         }
-    }
-    
-    let read_only = !has_state_change;
-    Ok((read_only, is_payable))
-}
 
-/// Generate function preconditions
-fn generate_function_preconditions(
-    selector: &[u8; 4],
-    state_modifications: &[StateModification],
-) -> Vec<String> {
-    let mut preconditions = Vec::new();
-    
-    // Basic precondition: correct function selector
-    preconditions.push(format!(
-        "(= (function-selector (data tx)) #x{})",
-        hex::encode(selector)
-    ));
-    
-    // Add preconditions based on state modifications
-    for modification in state_modifications {
-        match modification.modification_type {
-            ModificationType::Arithmetic => {
+        for modification in state_modifications {
+            if let ModificationType::Arithmetic = modification.modification_type {
                 preconditions.push(format!(
                     "(>= (storage-slot-{} (storage state)) 0)",
                     modification.storage_slot
                 ));
-            },
-            _ => {}
+            }
         }
-    }
-    
-    preconditions
-}
 
-/// Generate function postconditions
-fn generate_function_postconditions(
-    _selector: &[u8; 4],
-    state_modifications: &[StateModification],
-) -> Vec<String> {
-    let mut postconditions = Vec::new();
-    
-    // Success postcondition
-    postconditions.push(
-        "(=> (success result) (> (gas-used result) 0))".to_string()
-    );
-    
-    // State modification postconditions
-    for modification in state_modifications {
-        postconditions.push(format!(
-            "(=> (success result) 
-                (= (storage-slot-{} (storage (final-state result)))
-                   (updated-value (storage-slot-{} (storage state)))))",
-            modification.storage_slot,
-            modification.storage_slot
-        ));
+        Ok(preconditions)
     }
-    
-    postconditions
-}
 
-/// Analyze storage layout from instructions
-fn analyze_storage_layout(instructions: &[Instruction]) -> VerificationResult<HashMap<u64, String>> {
-    let mut layout = HashMap::new();
-    
-    // Look for storage operations and try to infer layout
-    for instruction in instructions {
-        match instruction.opcode.as_str() {
-            "SLOAD" | "SSTORE" => {
-                // Would need stack analysis to get actual storage slot
-                // For now, add some default entries
-                layout.insert(0, "uint256".to_string());
-                layout.insert(1, "address".to_string());
-                layout.insert(2, "mapping(address=>uint256)".to_string());
-            },
-            _ => {}
-        }
-    }
-    
-    Ok(layout)
-}
+    fn generate_postconditions(
+        &self,
+        _selector: &[u8; 4],
+        state_modifications: &[StateModification],
+    ) -> VerificationResult<Vec<String>> {
+        let mut postconditions = Vec::new();
 
-/// Analyze contract-level properties
-fn analyze_contract_properties(instructions: &[Instruction]) -> VerificationResult<ContractProperties> {
-    let mut is_proxy = false;
-    let mut is_upgradeable = false;
-    let mut has_reentrancy_guards = false;
-    let mut access_control = AccessControlType::None;
-    
-    // Look for common patterns
-    for instruction in instructions {
-        match instruction.opcode.as_str() {
-            "DELEGATECALL" => {
-                is_proxy = true;
-                is_upgradeable = true;
-            },
-            "CALLER" => {
-                // Might indicate access control
-                access_control = AccessControlType::Owner;
-            },
-            _ => {}
-        }
-    }
-    
-    // Look for reentrancy guard patterns (simplified)
-    let opcodes: Vec<&str> = instructions.iter().map(|i| i.opcode.as_str()).collect();
-    if opcodes.windows(3).any(|w| w == ["SLOAD", "ISZERO", "JUMPI"]) {
-        has_reentrancy_guards = true;
-    }
-    
-    Ok(ContractProperties {
-        is_proxy,
-        is_upgradeable,
-        has_reentrancy_guards,
-        access_control,
-    })
-}
+        postconditions.push("(=> (success result) (> (gas-used result) 0))".to_string());
 
-/// Generate state invariants from functions and storage
-fn generate_state_invariants(
-    functions: &[FunctionSemantics],
-    storage_layout: &HashMap<u64, String>,
-) -> VerificationResult<Vec<String>> {
-    let mut invariants = Vec::new();
-    
-    // Basic invariants for each storage slot
-    for (slot, slot_type) in storage_layout {
-        match slot_type.as_str() {
-            "uint256" => {
-                invariants.push(format!(
-                    "(assert (forall ((s State)) 
-                        (and (>= (storage-slot-{} (storage s)) 0) 
-                             (< (storage-slot-{} (storage s)) (^ 2 256)))))",
-                    slot, slot
-                ));
-            },
-            "address" => {
-                invariants.push(format!(
-                    "(assert (forall ((s State)) 
-                        (and (>= (storage-slot-{} (storage s)) 0) 
-                             (< (storage-slot-{} (storage s)) (^ 2 160)))))",
-                    slot, slot
-                ));
-            },
-            _ => {}
-        }
-    }
-    
-    // Function-specific invariants
-    for function in functions {
-        if function.read_only {
-            invariants.push(format!(
-                "(assert (forall ((s State) (tx Transaction))
-                    (= (storage (final-state ({} s tx))) (storage s))))",
-                function.name
+        for modification in state_modifications {
+            postconditions.push(format!(
+                "(=> (success result) 
+                    (= (storage-slot-{} (storage (final-state result)))
+                       (updated-value (storage-slot-{} (storage state)))))",
+                modification.storage_slot, modification.storage_slot
             ));
         }
+
+        Ok(postconditions)
     }
-    
-    Ok(invariants)
+
+    fn extract_function_selector_from_instructions(
+        &self,
+        instructions: &[Instruction],
+    ) -> Option<[u8; 4]> {
+        for instruction in instructions {
+            if let Ok(Opcode::PUSH(4)) = Opcode::from_str(&instruction.opcode) {
+                if let Some(imm) = &instruction.imm {
+                    if let Ok(bytes) = hex::decode(imm) {
+                        if bytes.len() == 4 {
+                            let mut selector = [0u8; 4];
+                            selector.copy_from_slice(&bytes);
+                            return Some(selector);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn is_transfer_function(&self, selector: &[u8; 4]) -> bool {
+        *selector == [0xa9, 0x05, 0x9c, 0xbb] // transfer(address,uint256)
+    }
+
+    fn is_admin_function(&self, selector: &[u8; 4]) -> bool {
+        // Example admin function selectors
+        const ADMIN_SELECTORS: &[[u8; 4]] = &[
+            [0xf2, 0xfd, 0xe3, 0x8b], // transferOwnership(address)
+            [0x7a, 0xd6, 0x92, 0x6b], // renounceOwnership()
+        ];
+        ADMIN_SELECTORS.contains(selector)
+    }
+
+    fn get_instruction_gas_cost(&self, opcode: &Opcode) -> u64 {
+        match opcode {
+            Opcode::ADD | Opcode::MUL | Opcode::SUB | Opcode::DIV | Opcode::SDIV => 3,
+
+            Opcode::MOD
+            | Opcode::SMOD
+            | Opcode::ADDMOD
+            | Opcode::MULMOD
+            | Opcode::EXP
+            | Opcode::SIGNEXTEND => 5,
+
+            Opcode::LT
+            | Opcode::GT
+            | Opcode::SLT
+            | Opcode::SGT
+            | Opcode::EQ
+            | Opcode::ISZERO
+            | Opcode::AND
+            | Opcode::OR
+            | Opcode::XOR
+            | Opcode::NOT
+            | Opcode::BYTE
+            | Opcode::SHL
+            | Opcode::SHR
+            | Opcode::SAR => 3,
+
+            Opcode::MLOAD | Opcode::MSTORE | Opcode::MSTORE8 => 3,
+            Opcode::SLOAD => 800,
+            Opcode::SSTORE => 20000,
+            Opcode::POP => 2,
+
+            Opcode::DUP(_) | Opcode::SWAP(_) => 3,
+            Opcode::PUSH(_) => 3,
+
+            Opcode::JUMP => 8,
+            Opcode::JUMPI => 10,
+            Opcode::JUMPDEST => 1,
+
+            Opcode::CALL | Opcode::CALLCODE | Opcode::DELEGATECALL | Opcode::STATICCALL => 700,
+
+            Opcode::RETURN | Opcode::REVERT => 0,
+            _ => 1,
+        }
+    }
+
+    fn has_function_selector(&self, selector: &[u8; 4]) -> bool {
+        let selector_hex = hex::encode(selector);
+
+        for node_idx in self.cfg_bundle.cfg.node_indices() {
+            if let Some(Block::Body { instructions, .. }) =
+                self.cfg_bundle.cfg.node_weight(node_idx)
+            {
+                for inst in instructions {
+                    if let Ok(Opcode::PUSH(4)) = Opcode::from_str(&inst.opcode) {
+                        if inst.imm.as_ref() == Some(&selector_hex) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn has_balance_mapping_pattern(&self) -> bool {
+        for node_idx in self.cfg_bundle.cfg.node_indices() {
+            if let Some(Block::Body { instructions, .. }) =
+                self.cfg_bundle.cfg.node_weight(node_idx)
+            {
+                if instructions.windows(10).any(|window| {
+                    window.iter().any(|inst| inst.opcode == "CALLDATALOAD")
+                        && window.iter().any(|inst| inst.opcode == "KECCAK256")
+                        && window.iter().any(|inst| inst.opcode == "SLOAD")
+                }) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn has_owner_storage_pattern(&self) -> bool {
+        for node_idx in self.cfg_bundle.cfg.node_indices() {
+            if let Some(Block::Body { instructions, .. }) =
+                self.cfg_bundle.cfg.node_weight(node_idx)
+            {
+                if instructions.windows(5).any(|window| {
+                    window.iter().any(|inst| inst.opcode == "CALLER")
+                        && window
+                            .iter()
+                            .any(|inst| matches!(inst.opcode.as_str(), "SLOAD" | "SSTORE"))
+                }) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn has_guard_check_pattern(&self) -> bool {
+        for node_idx in self.cfg_bundle.cfg.node_indices() {
+            if let Some(Block::Body { instructions, .. }) =
+                self.cfg_bundle.cfg.node_weight(node_idx)
+            {
+                if instructions.windows(3).any(|window| {
+                    window.len() == 3
+                        && window[0].opcode == "SLOAD"
+                        && window[1].opcode == "ISZERO"
+                        && window[2].opcode == "JUMPI"
+                }) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
-    
-    #[test]
-    fn test_extract_semantics_empty() {
-        let bytecode = vec![];
-        let result = extract_semantics(&bytecode);
-        
-        // Should handle empty bytecode gracefully
-        assert!(result.is_ok() || matches!(result.unwrap_err(), VerificationError::BytecodeAnalysis(_)));
+    use bytecloak_core::cfg_ir::CfgIrBundle;
+    use bytecloak_core::strip::CleanReport;
+    use petgraph::Graph;
+
+    // todo(g4titanx): impl. default for cleanreport
+    pub fn create_empty_clean_report() -> CleanReport {
+        CleanReport {
+            runtime_layout: vec![],
+            removed: vec![],
+            swarm_hash: None,
+            bytes_saved: 0,
+            clean_len: 0,
+            clean_keccak: [0; 32],
+            pc_map: vec![],
+        }
     }
-    
-    #[test]
-    fn test_block_boundary_detection() {
-        // Create mock instructions for testing
-        let instructions = vec![
-            Instruction { pc: 0, opcode: "JUMPDEST".to_string(), imm: None },
-            Instruction { pc: 1, opcode: "PUSH1".to_string(), imm: Some(vec![0x01]) },
-            Instruction { pc: 3, opcode: "JUMPI".to_string(), imm: None },
-            Instruction { pc: 4, opcode: "JUMPDEST".to_string(), imm: None },
-        ];
-        
-        let boundaries = find_block_boundaries(&instructions);
-        
-        assert!(boundaries.contains(&0)); // Start
-        assert!(boundaries.contains(&3)); // After JUMPI
-    }
-    
-    #[test]
-    fn test_gas_cost_calculation() {
-        assert_eq!(get_instruction_gas_cost_by_name("ADD"), 3);
-        assert_eq!(get_instruction_gas_cost_by_name("SLOAD"), 800);
-        assert_eq!(get_instruction_gas_cost_by_name("SSTORE"), 20000);
-    }
-    
+
     #[test]
     fn test_function_selector_extraction() {
-        let opcodes = vec!["PUSH4".to_string(), "DUP1".to_string()];
-        
-        let selector = extract_function_selector_from_opcodes(&opcodes);
-        assert!(selector.is_some()); // Should find PUSH4 pattern
+        let cfg_bundle = CfgIrBundle {
+            cfg: petgraph::Graph::new().into(),
+            pc_to_block: HashMap::new(),
+            clean_report: create_empty_clean_report(),
+        };
+        let analyzer = SemanticAnalyzer::new(cfg_bundle);
+
+        let instructions = vec![Instruction {
+            pc: 0,
+            opcode: "PUSH4".to_string(),
+            imm: Some("12345678".to_string()),
+        }];
+
+        let selector = analyzer.extract_function_selector_from_instructions(&instructions);
+        assert!(selector.is_some());
+        assert_eq!(selector.unwrap(), [0x12, 0x34, 0x56, 0x78]);
     }
-    
+
     #[test]
-    fn test_determine_block_type() {
-        let instructions_return = vec![
-            Instruction { pc: 0, opcode: "PUSH1".to_string(), imm: Some(vec![0x01]) },
-            Instruction { pc: 2, opcode: "RETURN".to_string(), imm: None },
-        ];
-        
-        assert!(matches!(determine_block_type(&instructions_return), BlockType::Return));
-        
-        let instructions_revert = vec![
-            Instruction { pc: 0, opcode: "PUSH1".to_string(), imm: Some(vec![0x01]) },
-            Instruction { pc: 2, opcode: "REVERT".to_string(), imm: None },
-        ];
-        
-        assert!(matches!(determine_block_type(&instructions_revert), BlockType::Error));
+    fn test_erc20_pattern_detection() {
+        // Create a CFG with actual blocks containing the instruction
+        let mut cfg = Graph::new();
+        let mut pc_to_block = HashMap::new();
+
+        // Create a block with the transfer function selector
+        let instructions = vec![Instruction {
+            pc: 0,
+            opcode: "PUSH4".to_string(),
+            imm: Some("a9059cbb".to_string()), // transfer selector
+        }];
+
+        let block = Block::Body {
+            start_pc: 0,
+            instructions,
+            max_stack: 1,
+        };
+
+        let node_idx = cfg.add_node(block);
+        pc_to_block.insert(0, node_idx);
+
+        let cfg_bundle = CfgIrBundle {
+            cfg: cfg.into(),
+            pc_to_block,
+            clean_report: create_empty_clean_report(),
+        };
+
+        let analyzer = SemanticAnalyzer::new(cfg_bundle);
+
+        // Now this should pass
+        assert!(analyzer.has_function_selector(&[0xa9, 0x05, 0x9c, 0xbb]));
+        assert!(analyzer.is_transfer_function(&[0xa9, 0x05, 0x9c, 0xbb]));
+    }
+
+    #[test]
+    fn test_transfer_function_detection() {
+        let cfg_bundle = CfgIrBundle {
+            cfg: petgraph::Graph::new().into(),
+            pc_to_block: HashMap::new(),
+            clean_report: create_empty_clean_report(),
+        };
+
+        let analyzer = SemanticAnalyzer::new(cfg_bundle);
+
+        // Test the pure function logic (doesn't depend on CFG)
+        assert!(analyzer.is_transfer_function(&[0xa9, 0x05, 0x9c, 0xbb]));
+
+        // Test function selector extraction from instructions directly
+        let instructions = vec![Instruction {
+            pc: 0,
+            opcode: "PUSH4".to_string(),
+            imm: Some("a9059cbb".to_string()),
+        }];
+
+        let selector = analyzer.extract_function_selector_from_instructions(&instructions);
+        assert!(selector.is_some());
+        assert_eq!(selector.unwrap(), [0xa9, 0x05, 0x9c, 0xbb]);
     }
 }

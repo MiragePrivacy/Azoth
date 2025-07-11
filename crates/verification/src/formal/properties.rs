@@ -16,9 +16,7 @@ pub enum SecurityProperty {
         invariant_formula: String, // SMT-LIB format
     },
     /// Reentrancy protection: Functions protected against reentrancy
-    ReentrancyProtection {
-        protected_functions: Vec<[u8; 4]>,
-    },
+    ReentrancyProtection { protected_functions: Vec<[u8; 4]> },
     /// Arithmetic overflow protection
     ArithmeticSafety {
         operations: Vec<ArithmeticOperation>,
@@ -44,13 +42,16 @@ impl SecurityProperty {
     /// Convert property to SMT-LIB formula
     pub fn to_smt_formula(&self) -> String {
         match self {
-            SecurityProperty::AccessControl { function_selector, authorized_callers } => {
+            SecurityProperty::AccessControl {
+                function_selector,
+                authorized_callers,
+            } => {
                 let selector_hex = hex::encode(function_selector);
                 let callers: Vec<String> = authorized_callers
                     .iter()
                     .map(|addr| format!("0x{}", hex::encode(addr)))
                     .collect();
-                
+
                 format!(
                     "(assert (forall ((caller Address) (input Input))
                         (=> (= (function-selector input) #x{})
@@ -58,35 +59,38 @@ impl SecurityProperty {
                     selector_hex,
                     callers.join(" ")
                 )
-            },
-            SecurityProperty::StateInvariant { name: _, invariant_formula } => {
-                invariant_formula.clone()
-            },
-            SecurityProperty::ReentrancyProtection { protected_functions } => {
+            }
+            SecurityProperty::StateInvariant {
+                name: _,
+                invariant_formula,
+            } => invariant_formula.clone(),
+            SecurityProperty::ReentrancyProtection {
+                protected_functions,
+            } => {
                 let selectors: Vec<String> = protected_functions
                     .iter()
                     .map(|sel| format!("#x{}", hex::encode(sel)))
                     .collect();
-                
+
                 format!(
                     "(assert (forall ((call-stack CallStack) (function-sel FunctionSelector))
                         (=> (member function-sel (list {}))
                             (not (contains-reentrant-call call-stack function-sel)))))",
                     selectors.join(" ")
                 )
-            },
+            }
             SecurityProperty::ArithmeticSafety { operations } => {
                 let ops: Vec<&str> = operations
                     .iter()
                     .map(|op| match op {
                         ArithmeticOperation::Addition => "add",
-                        ArithmeticOperation::Subtraction => "sub", 
+                        ArithmeticOperation::Subtraction => "sub",
                         ArithmeticOperation::Multiplication => "mul",
                         ArithmeticOperation::Division => "div",
                         ArithmeticOperation::Modulo => "mod",
                     })
                     .collect();
-                
+
                 format!(
                     "(assert (forall ((a Int) (b Int) (op Operation))
                         (=> (member op (list {}))
@@ -94,32 +98,47 @@ impl SecurityProperty {
                                  (< (apply-op op a b) (^ 2 256))))))",
                     ops.join(" ")
                 )
-            },
-            SecurityProperty::Custom { name: _, property_formula } => {
-                property_formula.clone()
-            },
+            }
+            SecurityProperty::Custom {
+                name: _,
+                property_formula,
+            } => property_formula.clone(),
         }
     }
-    
+
     /// Get a human-readable description of the property
     pub fn description(&self) -> String {
         match self {
-            SecurityProperty::AccessControl { function_selector, authorized_callers } => {
-                format!("Access Control: Function 0x{} restricted to {} authorized callers", 
-                       hex::encode(function_selector), authorized_callers.len())
-            },
+            SecurityProperty::AccessControl {
+                function_selector,
+                authorized_callers,
+            } => {
+                format!(
+                    "Access Control: Function 0x{} restricted to {} authorized callers",
+                    hex::encode(function_selector),
+                    authorized_callers.len()
+                )
+            }
             SecurityProperty::StateInvariant { name, .. } => {
-                format!("State Invariant: {}", name)
-            },
-            SecurityProperty::ReentrancyProtection { protected_functions } => {
-                format!("Reentrancy Protection: {} functions protected", protected_functions.len())
-            },
+                format!("State Invariant: {name}")
+            }
+            SecurityProperty::ReentrancyProtection {
+                protected_functions,
+            } => {
+                format!(
+                    "Reentrancy Protection: {} functions protected",
+                    protected_functions.len()
+                )
+            }
             SecurityProperty::ArithmeticSafety { operations } => {
-                format!("Arithmetic Safety: {} operations protected from overflow", operations.len())
-            },
+                format!(
+                    "Arithmetic Safety: {} operations protected from overflow",
+                    operations.len()
+                )
+            }
             SecurityProperty::Custom { name, .. } => {
-                format!("Custom Property: {}", name)
-            },
+                format!("Custom Property: {name}")
+            }
         }
     }
 }

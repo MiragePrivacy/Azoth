@@ -21,13 +21,15 @@ z3.workspace = true
 bitvec.workspace = true
 num-bigint.workspace = true
 indexmap.workspace = true
+petgraph.workspace = true
+eot.workspace = true
 
 # bytecloak
 bytecloak-core.workspace = true
 bytecloak-utils.workspace = true
 
 [features]
-default = ["practical-testing"]
+default = ["formal-verification"]
 practical-testing = []
 formal-verification = []
 anvil-testing = []

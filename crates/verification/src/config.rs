@@ -8,28 +8,28 @@ use std::time::Duration;
 pub struct VerificationConfig {
     /// Level of verification to perform
     pub verification_level: VerificationLevel,
-    
+
     /// Maximum acceptable gas overhead as a fraction (e.g., 0.15 = 15%)
     pub max_gas_overhead: f64,
-    
+
     /// Timeout for the entire verification process
     pub timeout: Duration,
-    
+
     /// Number of test cases to generate for practical testing
     pub test_case_count: usize,
-    
+
     /// Whether to enable formal verification (requires SMT solver)
     pub formal_verification_enabled: bool,
-    
+
     /// Whether to enable practical testing (requires EVM simulation)
     pub practical_testing_enabled: bool,
-    
+
     /// Parallel execution settings
     pub parallelism: ParallelismConfig,
-    
+
     /// SMT solver configuration
     pub smt_config: SmtConfig,
-    
+
     /// EVM testing configuration
     pub evm_config: EvmConfig,
 }
@@ -107,12 +107,12 @@ impl VerificationConfig {
             },
         }
     }
-    
+
     /// Standard verification configuration for CI/CD
     pub fn standard() -> Self {
         Self {
             verification_level: VerificationLevel::Standard,
-            max_gas_overhead: 0.15, // 15% overhead acceptable
+            max_gas_overhead: 0.15,            // 15% overhead acceptable
             timeout: Duration::from_secs(300), // 5 minutes
             test_case_count: 100,
             formal_verification_enabled: true,
@@ -130,7 +130,7 @@ impl VerificationConfig {
             },
         }
     }
-    
+
     /// Comprehensive verification configuration for production
     pub fn production() -> Self {
         Self {
@@ -160,7 +160,7 @@ impl VerificationConfig {
             },
         }
     }
-    
+
     /// Custom configuration for Mirage Protocol
     pub fn mirage_protocol() -> Self {
         Self {
@@ -190,33 +190,33 @@ impl VerificationConfig {
             },
         }
     }
-    
+
     /// Validate configuration parameters
     pub fn validate(&self) -> Result<(), crate::VerificationError> {
         if self.max_gas_overhead < 0.0 || self.max_gas_overhead > 1.0 {
             return Err(crate::VerificationError::Configuration(
-                "max_gas_overhead must be between 0.0 and 1.0".to_string()
+                "max_gas_overhead must be between 0.0 and 1.0".to_string(),
             ));
         }
-        
+
         if self.test_case_count == 0 {
             return Err(crate::VerificationError::Configuration(
-                "test_case_count must be greater than 0".to_string()
+                "test_case_count must be greater than 0".to_string(),
             ));
         }
-        
+
         if !self.formal_verification_enabled && !self.practical_testing_enabled {
             return Err(crate::VerificationError::Configuration(
-                "At least one verification method must be enabled".to_string()
+                "At least one verification method must be enabled".to_string(),
             ));
         }
-        
+
         if self.parallelism.max_concurrent_tasks == 0 {
             return Err(crate::VerificationError::Configuration(
-                "max_concurrent_tasks must be greater than 0".to_string()
+                "max_concurrent_tasks must be greater than 0".to_string(),
             ));
         }
-        
+
         Ok(())
     }
 }
@@ -238,31 +238,31 @@ impl Default for SmtConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_config_validation() {
         let mut config = VerificationConfig::development();
         assert!(config.validate().is_ok());
-        
+
         // Test invalid gas overhead
         config.max_gas_overhead = -0.1;
         assert!(config.validate().is_err());
-        
+
         config.max_gas_overhead = 1.5;
         assert!(config.validate().is_err());
-        
+
         // Test zero test cases
         config.max_gas_overhead = 0.15;
         config.test_case_count = 0;
         assert!(config.validate().is_err());
-        
+
         // Test no verification methods enabled
         config.test_case_count = 10;
         config.formal_verification_enabled = false;
         config.practical_testing_enabled = false;
         assert!(config.validate().is_err());
     }
-    
+
     #[test]
     fn test_preset_configs() {
         assert!(VerificationConfig::development().validate().is_ok());
@@ -270,17 +270,17 @@ mod tests {
         assert!(VerificationConfig::production().validate().is_ok());
         assert!(VerificationConfig::mirage_protocol().validate().is_ok());
     }
-    
+
     #[test]
     fn test_verification_levels() {
         let dev = VerificationConfig::development();
         let std = VerificationConfig::standard();
         let prod = VerificationConfig::production();
-        
+
         assert_eq!(dev.verification_level, VerificationLevel::Quick);
         assert_eq!(std.verification_level, VerificationLevel::Standard);
         assert_eq!(prod.verification_level, VerificationLevel::Comprehensive);
-        
+
         // Production should have the most test cases
         assert!(prod.test_case_count > std.test_case_count);
         assert!(std.test_case_count > dev.test_case_count);

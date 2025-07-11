@@ -1,6 +1,7 @@
 //! Mathematical proof structures and operations
 
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_256};
 use std::time::Duration;
 
 /// A formal mathematical proof of contract equivalence
@@ -55,7 +56,7 @@ impl FormalProof {
     ) -> Self {
         let valid = statements.iter().all(|s| s.proven);
         let proof_hash = Self::compute_hash(&statements);
-        
+
         Self {
             proof_type,
             statements,
@@ -64,29 +65,27 @@ impl FormalProof {
             proof_hash,
         }
     }
-    
+
     /// Compute hash of the proof for integrity verification
     fn compute_hash(statements: &[ProofStatement]) -> String {
-        use sha3::{Digest, Sha3_256};
-        
         let mut hasher = Sha3_256::new();
         for statement in statements {
             hasher.update(statement.formal_statement.as_bytes());
-            hasher.update(&statement.proven.to_string().as_bytes());
+            hasher.update(statement.proven.to_string().as_bytes());
         }
         hex::encode(hasher.finalize())
     }
-    
+
     /// Get the number of proven statements
     pub fn proven_statements_count(&self) -> usize {
         self.statements.iter().filter(|s| s.proven).count()
     }
-    
+
     /// Get the total number of statements
     pub fn total_statements_count(&self) -> usize {
         self.statements.len()
     }
-    
+
     /// Get proof success rate
     pub fn success_rate(&self) -> f64 {
         if self.statements.is_empty() {
@@ -95,19 +94,19 @@ impl FormalProof {
             self.proven_statements_count() as f64 / self.total_statements_count() as f64
         }
     }
-    
+
     /// Combine multiple proofs into one
     pub fn combine(proofs: Vec<FormalProof>) -> Self {
         let mut all_statements = Vec::new();
         let mut total_time = Duration::default();
         let mut proof_types = Vec::new();
-        
+
         for proof in proofs {
             all_statements.extend(proof.statements);
             total_time += proof.proof_time;
             proof_types.push(proof.proof_type);
         }
-        
+
         Self::new(ProofType::Combined(proof_types), all_statements, total_time)
     }
 }
@@ -127,22 +126,14 @@ impl ProofStatement {
             proof_time,
         }
     }
-    
+
     /// Create a successful proof statement
-    pub fn proven(
-        description: String,
-        formal_statement: String,
-        proof_time: Duration,
-    ) -> Self {
+    pub fn proven(description: String, formal_statement: String, proof_time: Duration) -> Self {
         Self::new(description, formal_statement, true, proof_time)
     }
-    
+
     /// Create a failed proof statement
-    pub fn failed(
-        description: String,
-        formal_statement: String,
-        proof_time: Duration,
-    ) -> Self {
+    pub fn failed(description: String, formal_statement: String, proof_time: Duration) -> Self {
         Self::new(description, formal_statement, false, proof_time)
     }
 }
@@ -150,44 +141,50 @@ impl ProofStatement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_proof_creation() {
-        let statements = vec![
-            ProofStatement::proven(
-                "Test statement".to_string(),
-                "(assert true)".to_string(),
-                Duration::from_millis(100),
-            )
-        ];
-        
+        let statements = vec![ProofStatement::proven(
+            "Test statement".to_string(),
+            "(assert true)".to_string(),
+            Duration::from_millis(100),
+        )];
+
         let proof = FormalProof::new(
             ProofType::Bisimulation,
             statements,
             Duration::from_millis(100),
         );
-        
+
         assert!(proof.valid);
         assert_eq!(proof.proven_statements_count(), 1);
         assert_eq!(proof.success_rate(), 1.0);
     }
-    
+
     #[test]
     fn test_proof_combination() {
         let proof1 = FormalProof::new(
             ProofType::Bisimulation,
-            vec![ProofStatement::proven("Test 1".to_string(), "(assert true)".to_string(), Duration::from_millis(50))],
+            vec![ProofStatement::proven(
+                "Test 1".to_string(),
+                "(assert true)".to_string(),
+                Duration::from_millis(50),
+            )],
             Duration::from_millis(50),
         );
-        
+
         let proof2 = FormalProof::new(
             ProofType::StateEquivalence,
-            vec![ProofStatement::proven("Test 2".to_string(), "(assert (= a b))".to_string(), Duration::from_millis(75))],
+            vec![ProofStatement::proven(
+                "Test 2".to_string(),
+                "(assert (= a b))".to_string(),
+                Duration::from_millis(75),
+            )],
             Duration::from_millis(75),
         );
-        
+
         let combined = FormalProof::combine(vec![proof1, proof2]);
-        
+
         assert_eq!(combined.total_statements_count(), 2);
         assert_eq!(combined.proof_time, Duration::from_millis(125));
         assert!(matches!(combined.proof_type, ProofType::Combined(_)));
