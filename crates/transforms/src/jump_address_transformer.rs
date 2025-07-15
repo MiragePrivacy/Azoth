@@ -164,13 +164,11 @@ impl Transform for JumpAddressTransformer {
                                 let part2_opcode = self.get_push_opcode_for_value(part2);
 
                                 // Calculate byte sizes for formatting
-                                let part1_bytes = part1_opcode
-                                    .strip_prefix("PUSH")
-                                    .and_then(|s| s.parse::<usize>().ok())
+                                let part1_bytes = crate::util::parse_push_opcode(&part1_opcode)
+                                    .map(|(_, size)| size)
                                     .unwrap_or(1);
-                                let part2_bytes = part2_opcode
-                                    .strip_prefix("PUSH")
-                                    .and_then(|s| s.parse::<usize>().ok())
+                                let part2_bytes = crate::util::parse_push_opcode(&part2_opcode)
+                                    .map(|(_, size)| size)
                                     .unwrap_or(1);
 
                                 // Create new instruction sequence
