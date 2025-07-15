@@ -123,8 +123,8 @@ pub fn locate_sections(
     }
 
     // Only push Padding if ConstructorArgs is not present
-    if !has_constructor_args {
-        if let Some((pad_offset, pad_len)) = padding {
+    if !has_constructor_args
+        && let Some((pad_offset, pad_len)) = padding {
             tracing::debug!("Padding detected: offset={}, len={}", pad_offset, pad_len);
             sections.push(Section {
                 kind: SectionKind::Padding,
@@ -132,7 +132,6 @@ pub fn locate_sections(
                 len: pad_len,
             });
         }
-    }
 
     // Pass E: Fallback to Runtime if no dispatcher pattern
     if init_end == 0 && runtime_start == 0 && aux_offset != 0 {
