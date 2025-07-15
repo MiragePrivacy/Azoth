@@ -237,7 +237,7 @@ mod tests {
         let bytecode = "0x600160015601"; // PUSH1 0x01, PUSH1 0x01, ADD
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytes, &instructions).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
         let cfg_ir =
             cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
@@ -265,7 +265,7 @@ mod tests {
         let bytecode = "0x600050"; // PUSH1 0x00, STOP
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytes, &instructions).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
         let cfg_ir =
             cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
@@ -290,7 +290,7 @@ mod tests {
         let bytecode = "0x6000600157600256"; // PUSH1 0x00, JUMPI, JUMPDEST, STOP
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytes, &instructions).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
         let cfg_ir =
             cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
@@ -330,7 +330,7 @@ mod tests {
         let bytecode = "0x00"; // STOP
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytes, &instructions).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
         let cfg_ir =
             cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
@@ -350,7 +350,7 @@ mod tests {
             .await
             .unwrap();
         let bytes = hex::decode(bytecode_before.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytes, &instructions).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
         let cfg_ir =
             cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
@@ -361,7 +361,7 @@ mod tests {
             .await
             .unwrap();
         let bytes = hex::decode(bytecode_after.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytes, &instructions).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
         let cfg_ir =
             cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
@@ -382,7 +382,7 @@ mod tests {
             .await
             .unwrap();
         let bytes = hex::decode(bytecode_simple.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytes, &instructions).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
         let cfg_ir =
             cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
@@ -393,7 +393,7 @@ mod tests {
             .await
             .unwrap();
         let bytes = hex::decode(bytecode_complex.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytes, &instructions).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
         let cfg_ir =
             cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
@@ -414,7 +414,7 @@ mod tests {
         let bytecode = "0x6000600157600256"; // PUSH1 0x00, PUSH1 0x01, JUMPI, PUSH1 0x02, JUMP
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytes, &instructions).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
         let cfg_ir =
             cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();

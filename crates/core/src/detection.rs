@@ -9,12 +9,12 @@
 ///
 /// # Usage
 /// ```rust,ignore
-/// let (instructions, info, _) = decoder::decode_bytecode("0x60016002", false).await.unwrap();
+/// let (instructions, _info, _) = decoder::decode_bytecode("0x60016002", false).await.unwrap();
 /// let sections =
-///     locate_sections(&hex::decode("60016002").unwrap(), &instructions, &info).unwrap();
+///     locate_sections(&hex::decode("60016002").unwrap(), &instructions).unwrap();
 /// assert!(!sections.is_empty());
 /// ```
-use crate::decoder::{DecodeInfo, Instruction};
+use crate::decoder::Instruction;
 use bytecloak_utils::errors::DetectError;
 use serde::{Deserialize, Serialize};
 
@@ -60,7 +60,6 @@ impl Section {
 /// # Arguments
 /// * `bytes` - Raw bytecode bytes.
 /// * `instructions` - Decoded instructions from `decoder.rs`.
-/// * `info` - Metadata about the bytecode from `decoder.rs`.
 ///
 /// # Returns
 /// A `Result` containing a vector of `Section` structs, ordered by offset, covering the entire
@@ -71,14 +70,12 @@ impl Section {
 /// ```rust,ignore
 /// let bytes = hex::decode("60016002").unwrap();
 /// let instructions = vec![/* parsed instructions */];
-/// let info = DecodeInfo { byte_length: 2, keccak_hash: [0; 32], source: SourceType::HexString };
-/// let sections = locate_sections(&bytes, &instructions, &info).unwrap();
+/// let sections = locate_sections(&bytes, &instructions).unwrap();
 /// assert_eq!(sections.len(), 1); // Single Runtime section if no pattern
 /// ```
 pub fn locate_sections(
     bytes: &[u8],
     instructions: &[Instruction],
-    _info: &DecodeInfo,
 ) -> Result<Vec<Section>, DetectError> {
     let mut sections = Vec::new();
     let total_len = bytes.len();
@@ -366,7 +363,7 @@ fn detect_constructor_args(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{decoder, decoder::SourceType};
+    use crate::decoder;
     use hex;
 
     #[tokio::test]
@@ -375,13 +372,13 @@ mod tests {
             .with_max_level(tracing::Level::DEBUG)
             .init();
         let bytecode = "0xa165627a7a720000"; // Simplified Auxdata example
-        let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+        let (instructions, _info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
         tracing::debug!("Bytecode: {:?}", bytes);
         tracing::debug!("Instructions: {:?}", instructions);
-        tracing::debug!("DecodeInfo: {:?}", info);
+        tracing::debug!("Instructions count: {}", instructions.len());
 
-        let result = locate_sections(&bytes, &instructions, &info);
+        let result = locate_sections(&bytes, &instructions);
         match result {
             Ok(sections) => {
                 tracing::debug!("Detected sections: {:?}", sections);
@@ -415,11 +412,7 @@ mod tests {
             .init();
         let _bytes = vec![0; 10];
         let _instructions: Vec<Instruction> = vec![]; // Explicit type annotation
-        let _info = DecodeInfo {
-            byte_length: 10,
-            keccak_hash: [0; 32],
-            source: SourceType::HexString,
-        };
+        // Test unused DecodeInfo removed
         // Simulate overlap
         let mut simulated_sections = vec![
             Section {
@@ -463,13 +456,13 @@ mod tests {
             "a165627a7a723058"  // Auxdata (simplified CBOR: "bzzr0X")
         );
 
-        let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+        let (instructions, _info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
         tracing::debug!("Full deploy bytecode: {:?}", bytes);
         tracing::debug!("Instructions: {:?}", instructions);
-        tracing::debug!("DecodeInfo: {:?}", info);
+        tracing::debug!("Instructions count: {}", instructions.len());
 
-        let sections = locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = locate_sections(&bytes, &instructions).unwrap();
         tracing::debug!("Detected sections: {:?}", sections);
         for (i, section) in sections.iter().enumerate() {
             tracing::debug!(
@@ -533,11 +526,11 @@ mod tests {
             .with_max_level(tracing::Level::DEBUG)
             .init();
         let hex = "60016000f3".to_owned() + &"00".repeat(32);
-        let (instructions, info, _) = decoder::decode_bytecode(&format!("0x{}", hex), false)
+        let (instructions, _info, _) = decoder::decode_bytecode(&format!("0x{}", hex), false)
             .await
             .unwrap();
         let bytes = hex::decode(hex).unwrap();
-        let sections = locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = locate_sections(&bytes, &instructions).unwrap();
         let rt = sections
             .iter()
             .find(|s| s.kind == SectionKind::Runtime)
