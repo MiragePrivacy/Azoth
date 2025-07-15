@@ -154,12 +154,10 @@ fn create_mirage_transforms() -> Vec<Box<dyn azoth_transform::util::Transform>> 
     vec![
         Box::new(azoth_transform::shuffle::Shuffle),
         Box::new(
-            azoth_transform::jump_address_transformer::JumpAddressTransformer::new(
-                PassConfig {
-                    max_size_delta: 0.2,
-                    ..Default::default()
-                },
-            ),
+            azoth_transform::jump_address_transformer::JumpAddressTransformer::new(PassConfig {
+                max_size_delta: 0.2,
+                ..Default::default()
+            }),
         ),
         Box::new(azoth_transform::opaque_predicate::OpaquePredicate::new(
             PassConfig {

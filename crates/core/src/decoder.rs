@@ -229,8 +229,10 @@ mod tests {
     #[tokio::test]
     async fn test_decode_from_bytes() {
         let bytes = hex::decode(BYTECODE.trim_start_matches("0x")).unwrap();
-        let (ins, info, asm) = decode_bytecode_from_bytes(&bytes, SourceType::HexString).await.unwrap();
-        
+        let (ins, info, asm) = decode_bytecode_from_bytes(&bytes, SourceType::HexString)
+            .await
+            .unwrap();
+
         tracing::debug!("\nRaw assembly from bytes:\n{}", asm);
         tracing::debug!("Parsed instructions from bytes:");
         for instr in &ins {
@@ -243,7 +245,9 @@ mod tests {
         assert!(!info.keccak_hash.is_empty());
 
         // Test with different source type
-        let (ins2, info2, _) = decode_bytecode_from_bytes(&bytes, SourceType::File).await.unwrap();
+        let (ins2, info2, _) = decode_bytecode_from_bytes(&bytes, SourceType::File)
+            .await
+            .unwrap();
         assert_eq!(ins2, ins); // Instructions should be identical
         assert_eq!(info2.byte_length, info.byte_length);
         assert_eq!(info2.keccak_hash, info.keccak_hash);
