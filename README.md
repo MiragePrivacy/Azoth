@@ -1,10 +1,10 @@
 # Azoth
 
-**Azoth** is an open-source EVM bytecode obfuscator designed to make Mirage's execution contracts statistically indistinguishable from ordinary, unverified deployments on Ethereum. By providing on-chain privacy without the tell-tale fingerprints that mixers or shielded pools leave behind, Azoth raises the analytical cost of deobfuscating contracts while keeping gas overhead and deploy size within reasonable bounds.
+**Azoth** is an open-source EVM bytecode obfuscator designed to make Mirage's execution contracts ***statistically indistinguishable*** from ordinary, unverified deployments on Ethereum. By providing on-chain privacy without the tell-tale fingerprints that mixers or shielded pools leave behind, Azoth raises the analytical cost of deobfuscating contracts while keeping gas overhead and deploy size within reasonable bounds.
 
 ## Etymology and Philosophy
 
-The name "Azoth" derives from medieval alchemy, where it referred to the universal solvent: a hypothetical substance capable of dissolving any material and serving as the essential agent of transformation. Just as alchemical azoth was believed to transmute base metals into gold through deterministic processes, our Azoth transforms EVM bytecode through deterministic, seed-based obfuscation passes.
+The name "Azoth" derives from medieval alchemy, where it referred to the universal solvent: a hypothetical substance capable of dissolving any material and serving as **the essential agent of transformation**. Just as alchemical azoth was believed to transmute base metals into gold through deterministic processes, our Azoth transforms EVM bytecode through deterministic, seed-based obfuscation passes.
 
 This naming reflects our core philosophy: "dissect first, disguise later". Azoth analyzes a contract's control-flow, rewrites it with deterministic layered transforms, then re-assembles and emits a byte-for-byte reproducible binary. Like its alchemical namesake, the transformation is both profound and reproducible. Given the same input and seed, Azoth will always produce identical output.
 
@@ -14,7 +14,7 @@ Azoth is currently in active development and testing as we prepare for productio
 
 The obfuscation transform system is operational with several key passes implemented. Opaque predicates inject always-true or always-false conditions to confuse static analysis. Control flow shuffling reorders basic blocks while preserving semantics. Jump address transformation modifies jump targets to obscure control flow patterns. Stack noise injection adds semantically neutral stack operations that complicate reverse engineering without affecting execution.
 
-Our analysis and metrics system tracks potency through structural and statistical complexity measurement, resilience via resistance to automated decompilation scoring, and cost through gas overhead and bytecode size impact analysis. The dominance analysis component constructs control flow dominance trees for advanced program analysis.
+Our analysis and metrics system tracks i) potency through structural and statistical complexity measurement, ii) resilience via resistance to automated decompilation scoring, and iii) cost through gas overhead and bytecode size impact analysis. The dominance analysis component constructs control flow dominance trees for advanced program analysis.
 
 The CLI interface provides comprehensive tooling with deterministic compilation support, enabling reproducible builds from seed values. The pass management system offers configurable transform pipelines with threshold-based acceptance criteria.
 
@@ -40,7 +40,7 @@ Every transform must raise Potency and Resilience above clearly defined threshol
 
 Azoth requires Rust edition 2024, which needs the nightly toolchain. Install it with `rustup toolchain install nightly` followed by `rustup default nightly`. 
 
-Build from source by cloning the repository at https://github.com/MiragePrivacy/obfuscator.git, entering the directory, and running `cargo build --release`. Install the CLI with `cargo install --path crates/cli`.
+Build from source by cloning the repository, entering the directory, and running `cargo build --release`. Install the CLI with `cargo install --path crates/cli`.
 
 ## Usage Guide
 
@@ -93,12 +93,6 @@ for contract in contracts/*.hex; do
 done
 ```
 
-## Development and Testing
-
-Run all tests with `cargo test`. Target specific tests with `cargo test test_opaque_predicate`. End-to-end tests are available with `cargo test --test e2e_erc20`.
-
-Maintain code quality with `cargo fmt` for formatting and `cargo clippy` for issue detection. Performance benchmarks run with `cargo bench`.
-
 ## Production Readiness
 
 Azoth is being prepared for production deployment with comprehensive testing of all obfuscation passes, formal verification of semantic equivalence, and extensive benchmarking of gas costs and deployment sizes. We are actively working toward a stable release that will provide enterprise-grade bytecode obfuscation capabilities.
@@ -107,23 +101,13 @@ Azoth is being prepared for production deployment with comprehensive testing of 
 
 Azoth welcomes contributions in new obfuscation transforms, improved metrics and analysis, performance optimizations, documentation improvements, and bug reports with fixes. See our contributing guidelines for detailed information.
 
-## Usage in Production
+### Development and Testing
 
-If you use Azoth in your production systems, please cite:
+Run all tests with `cargo test`. Target specific tests with `cargo test test_opaque_predicate`. End-to-end tests are available with `cargo test --test e2e_erc20`.
 
-```bibtex
-@misc{azoth2024,
-  title={Azoth: Deterministic EVM Bytecode Obfuscation for On-Chain Privacy},
-  author={Mirage Privacy Team},
-  year={2024},
-  howpublished={\url{https://github.com/MiragePrivacy/obfuscator}}
-}
-```
+Maintain code quality with `cargo fmt` for formatting and `cargo clippy` for issue detection. Performance benchmarks run with `cargo bench`.
+
 
 ## Acknowledgments
 
 Azoth builds upon extensive research in program obfuscation, control flow analysis, and blockchain privacy. We thank the broader research community for their foundational work in these areas.
-
-## License
-
-This project is licensed under the MIT License.
