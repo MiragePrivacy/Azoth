@@ -104,9 +104,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(health_check))
-        .route("/health", get(health_check))
         .route("/obfuscate", post(obfuscate_bytecode))
-        .route("/analyze", post(analyze_bytecode))
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
@@ -205,37 +203,6 @@ async fn obfuscate_bytecode(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 ResponseJson(ErrorResponse {
                     error: "Obfuscation failed".to_string(),
-                    details: Some(e.to_string()),
-                }),
-            ))
-        }
-    }
-}
-
-async fn analyze_bytecode(
-    Json(request): Json<serde_json::Value>,
-) -> Result<ResponseJson<serde_json::Value>, (StatusCode, ResponseJson<ErrorResponse>)> {
-    let bytecode = request["bytecode"]
-        .as_str()
-        .ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                ResponseJson(ErrorResponse {
-                    error: "Missing bytecode field".to_string(),
-                    details: None,
-                }),
-            )
-        })?
-        .trim_start_matches("0x");
-
-    match analyze_bytecode_structure(bytecode).await {
-        Ok(analysis) => Ok(ResponseJson(analysis)),
-        Err(e) => {
-            error!("Analysis failed: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ResponseJson(ErrorResponse {
-                    error: "Analysis failed".to_string(),
                     details: Some(e.to_string()),
                 }),
             ))
@@ -415,50 +382,6 @@ async fn perform_obfuscation(
     })
 }
 
-async fn analyze_bytecode_structure(
-    bytecode_hex: &str,
-) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-    let input = format!("0x{bytecode_hex}");
-    let (instructions, info, raw_asm) = decoder::decode_bytecode(&input, false).await?;
-    let bytes = hex::decode(bytecode_hex)?;
-    let sections = detection::locate_sections(&bytes, &instructions, &info)?;
-
-    // Build CFG for additional analysis
-    let (clean_runtime, report) = strip::strip_bytecode(&bytes, &sections)?;
-    let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report)?;
-
-    let analysis = serde_json::json!({
-        "bytecode_info": {
-            "size_bytes": info.byte_length,
-            "keccak_hash": hex::encode(info.keccak_hash),
-            "source_type": format!("{:?}", info.source)
-        },
-        "sections": sections.iter().map(|s| {
-            serde_json::json!({
-                "kind": format!("{:?}", s.kind),
-                "offset": s.offset,
-                "length": s.len,
-                "end": s.end()
-            })
-        }).collect::<Vec<_>>(),
-        "instruction_count": instructions.len(),
-        "cfg_info": {
-            "block_count": cfg_ir.cfg.node_count(),
-            "edge_count": cfg_ir.cfg.edge_count(),
-            "complexity_estimate": cfg_ir.cfg.edge_count() as f64 / cfg_ir.cfg.node_count() as f64
-        },
-        "runtime_size": clean_runtime.len(),
-        "obfuscation_readiness": {
-            "has_jumps": instructions.iter().any(|i| i.opcode == "JUMP" || i.opcode == "JUMPI"),
-            "has_loops": cfg_ir.cfg.edge_count() > cfg_ir.cfg.node_count(),
-            "complexity_score": std::cmp::min(10, cfg_ir.cfg.edge_count() * 2 / cfg_ir.cfg.node_count())
-        },
-        "raw_assembly": raw_asm
-    });
-
-    Ok(analysis)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,24 +422,6 @@ mod tests {
         let body = response.json::<ObfuscateResponse>();
         assert!(body.obfuscated_bytecode.starts_with("0x"));
         assert!(body.original_size > 0);
-    }
-
-    #[tokio::test]
-    async fn test_analyze_bytecode() {
-        let app = Router::new().route("/analyze", post(analyze_bytecode));
-        let server = TestServer::new(app).unwrap();
-
-        let request = serde_json::json!({
-            "bytecode": "0x6001600255"
-        });
-
-        let response = server.post("/analyze").json(&request).await;
-        assert_eq!(response.status_code(), StatusCode::OK);
-
-        let body = response.json::<serde_json::Value>();
-        assert!(body["bytecode_info"]["size_bytes"].as_u64().unwrap() > 0);
-        assert!(body["instruction_count"].as_u64().unwrap() > 0);
-        assert!(body["cfg_info"]["block_count"].as_u64().unwrap() >= 2); // At least Entry and Exit
     }
 
     #[tokio::test]
