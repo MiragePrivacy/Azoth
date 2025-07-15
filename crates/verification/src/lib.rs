@@ -1,4 +1,4 @@
-//! ByteCloak Formal Verification Engine
+//! Azoth Formal Verification Engine
 //!
 //! This crate provides mathematical guarantees that obfuscated contracts are
 //! functionally equivalent to their original versions through:

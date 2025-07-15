@@ -1,9 +1,9 @@
-# Bytecloak
+# Azoth
 
-**Bytecloak** is an open-source EVM‐bytecode obfuscator. Its purpose is to make Mirage’s execution contracts _statistically indistinguishable_ from the ocean of ordinary, unverified deployments on Ethereum, giving users on-chain privacy **without** the tell-tale fingerprints that mixers or shielded pools leave behind. In the process of doing this, we also raise the analytical cost of deobfuscating a single contract while keeping gas overhead and deploy size in check. Now, with this in mind, we approach this with a philosophy that says: “dissect first, disguise later”. Therefore, Bytecloak analyses a contract’s control-flow, rewrites it with deterministic layered transforms, it then re-assembles and emit a byte‑for‑byte reproducible binary.
+**Azoth** is an open-source EVM‐bytecode obfuscator. Its purpose is to make Mirage's execution contracts _statistically indistinguishable_ from the ocean of ordinary, unverified deployments on Ethereum, giving users on-chain privacy **without** the tell-tale fingerprints that mixers or shielded pools leave behind. In the process of doing this, we also raise the analytical cost of deobfuscating a single contract while keeping gas overhead and deploy size in check. Now, with this in mind, we approach this with a philosophy that says: "dissect first, disguise later". Therefore, Azoth analyses a contract's control-flow, rewrites it with deterministic layered transforms, it then re-assembles and emit a byte‑for‑byte reproducible binary.
 
 ## Overview
-Bytecloak unfolds itself in three different stages:
+Azoth unfolds itself in three different stages:
 
 1. **Pre-processing**  
    In this stage we precisely isolate/analyze the different sections of the EVM bytecode, producing a clean `runtime` blob and a typed instruction stream.
@@ -28,8 +28,8 @@ Every transform must raise Potency and Resilience above clearly defined threshol
 ```bash
 cd crates/cli
 cargo install --path .
-bytecloak decode <INPUT>
-bytecloak strip <INPUT> [--raw]
-bytecloak cfg <INPUT> [-o <OUTPUT>]
-bytecloak obfuscate <INPUT> [--seed <SEED>] [--passes <PASSES>] [--accept-threshold <THRESHOLD>] [--max-size-delta <DELTA>] [--emit <PATH>]
+azoth decode <INPUT>
+azoth strip <INPUT> [--raw]
+azoth cfg <INPUT> [-o <OUTPUT>]
+azoth obfuscate <INPUT> [--seed <SEED>] [--passes <PASSES>] [--accept-threshold <THRESHOLD>] [--max-size-delta <DELTA>] [--emit <PATH>]
 ```
