@@ -1,218 +1,93 @@
 # Azoth
 
-**Azoth** is an open-source EVM bytecode obfuscator designed to make Mirage's execution contracts _statistically indistinguishable_ from ordinary, unverified deployments on Ethereum. By providing on-chain privacy without the tell-tale fingerprints that mixers or shielded pools leave behind, Azoth raises the analytical cost of deobfuscating contracts while keeping gas overhead and deploy size within reasonable bounds.
+**Azoth** is an open-source EVM bytecode obfuscator designed to make Mirage's execution contracts statistically indistinguishable from ordinary, unverified deployments on Ethereum. By providing on-chain privacy without the tell-tale fingerprints that mixers or shielded pools leave behind, Azoth raises the analytical cost of deobfuscating contracts while keeping gas overhead and deploy size within reasonable bounds.
 
 ## Etymology and Philosophy
 
-The name "Azoth" derives from medieval alchemy, where it referred to the universal solvent—a hypothetical substance capable of dissolving any material and serving as the essential agent of transformation. Just as alchemical azoth was believed to transmute base metals into gold through deterministic processes, our Azoth transforms EVM bytecode through deterministic, seed-based obfuscation passes.
+The name "Azoth" derives from medieval alchemy, where it referred to the universal solvent: a hypothetical substance capable of dissolving any material and serving as the essential agent of transformation. Just as alchemical azoth was believed to transmute base metals into gold through deterministic processes, our Azoth transforms EVM bytecode through deterministic, seed-based obfuscation passes.
 
-This naming reflects our core philosophy: **"dissect first, disguise later"**. Azoth analyzes a contract's control-flow, rewrites it with deterministic layered transforms, then re-assembles and emits a byte-for-byte reproducible binary. Like its alchemical namesake, the transformation is both profound and reproducible—given the same input and seed, Azoth will always produce identical output.
+This naming reflects our core philosophy: "dissect first, disguise later". Azoth analyzes a contract's control-flow, rewrites it with deterministic layered transforms, then re-assembles and emits a byte-for-byte reproducible binary. Like its alchemical namesake, the transformation is both profound and reproducible. Given the same input and seed, Azoth will always produce identical output.
 
-## Project Status
+## Current Status
 
-Azoth is currently in **active development** as a research-grade toolchain. The following components are implemented and functional:
+Azoth is currently in active development and testing as we prepare for production deployment. The core infrastructure is complete and functional, including comprehensive EVM bytecode parsing, section detection, control flow graph generation with SSA-form intermediate representation, and full instruction decoding with semantic analysis. The bytecode stripping functionality successfully isolates runtime code from constructor and auxiliary data.
 
-### ✅ Core Infrastructure
-- **Bytecode Analysis**: Complete EVM bytecode parsing and section detection
-- **CFG Construction**: Control Flow Graph generation with SSA-form intermediate representation
-- **Instruction Decoding**: Full EVM opcode support with semantic analysis
-- **Bytecode Stripping**: Isolation of runtime code from constructor and auxiliary data
+The obfuscation transform system is operational with several key passes implemented. Opaque predicates inject always-true or always-false conditions to confuse static analysis. Control flow shuffling reorders basic blocks while preserving semantics. Jump address transformation modifies jump targets to obscure control flow patterns. Stack noise injection adds semantically neutral stack operations that complicate reverse engineering without affecting execution.
 
-### ✅ Obfuscation Transforms
-- **Opaque Predicates**: Injection of always-true/false conditions to confuse static analysis
-- **Control Flow Shuffling**: Reordering of basic blocks while preserving semantics
-- **Jump Address Transformation**: Modification of jump targets to obscure control flow
-- **Stack Noise Injection**: Addition of semantically neutral stack operations
+Our analysis and metrics system tracks potency through structural and statistical complexity measurement, resilience via resistance to automated decompilation scoring, and cost through gas overhead and bytecode size impact analysis. The dominance analysis component constructs control flow dominance trees for advanced program analysis.
 
-### ✅ Analysis and Metrics
-- **Potency Measurement**: Structural and statistical complexity analysis
-- **Resilience Scoring**: Resistance to automated decompilation
-- **Cost Analysis**: Gas overhead and bytecode size impact tracking
-- **Dominance Analysis**: Control flow dominance tree construction
+The CLI interface provides comprehensive tooling with deterministic compilation support, enabling reproducible builds from seed values. The pass management system offers configurable transform pipelines with threshold-based acceptance criteria.
 
-### ✅ Tooling
-- **CLI Interface**: Complete command-line tool with comprehensive options
-- **Deterministic Compilation**: Reproducible builds from seed values
-- **Pass Management**: Configurable transform pipeline with threshold-based acceptance
-
-### 🚧 In Development
-- **Formal Verification**: Mathematical proofs of semantic equivalence (verification crate)
-- **Advanced Metrics**: Enhanced complexity and obfuscation quality measures
-- **Additional Transforms**: Function dispatcher obfuscation, data flow obfuscation
+Currently under active development are formal verification components that will provide mathematical proofs of semantic equivalence, enhanced complexity and obfuscation quality measures, and additional transforms including function dispatcher obfuscation and advanced data flow obfuscation techniques. These components are being rigorously tested before production release.
 
 ## Architecture
 
-Azoth unfolds in three distinct stages:
+Azoth unfolds in three distinct stages that mirror the alchemical process of dissolution, transformation, and reconstitution.
 
-### 1. Pre-processing
-Precisely isolates and analyzes different sections of EVM bytecode, producing a clean `runtime` blob and typed instruction stream. This stage includes:
-- Bytecode section detection and isolation
-- Instruction stream parsing and validation
-- Control flow graph construction
-- SSA-form intermediate representation generation
+**Pre-processing** precisely isolates and analyzes different sections of EVM bytecode, producing a clean runtime blob and typed instruction stream. This stage encompasses bytecode section detection and isolation, instruction stream parsing and validation, control flow graph construction, and SSA-form intermediate representation generation. The system must understand the contract's structure completely before any transformation can begin.
 
-### 2. Obfuscation Core
-The `runtime` is lifted into a `CFG + SSA` intermediate representation. Deterministic, pluggable passes then mutate the graph with different transforms:
-- Each pass operates on the CFG/SSA representation
-- Metrics are recomputed after each transformation
-- Changes are rolled back if improvement doesn't exceed configurable thresholds
-- Passes can be chained and configured independently
+**Obfuscation Core** lifts the runtime into a CFG plus SSA intermediate representation. Deterministic, pluggable passes then mutate the graph with different transforms. Each pass operates on the CFG/SSA representation while metrics are recomputed after each transformation. Changes are rolled back if improvement doesn't exceed configurable thresholds. Passes can be chained and configured independently, allowing for fine-tuned obfuscation strategies.
 
-### 3. Bytecode Recovery
-The encoder re-assembles the transformed runtime with the untouched constructor and auxiliary data, producing deployable bytecode whose Keccak hash matches deterministic recompilation `O(S, seed)`.
+**Bytecode Recovery** re-assembles the transformed runtime with the untouched constructor and auxiliary data, producing deployable bytecode whose Keccak hash matches deterministic recompilation. The function signature remains O(S, seed), ensuring reproducibility while maintaining the contract's original deployment characteristics.
 
 ## Metrics and Quality Assurance
 
-Azoth tracks three key metrics to ensure obfuscation quality:
+Azoth tracks three key metrics to ensure obfuscation quality. **Potency** measures structural and statistical complexity added, including cyclomatic complexity increases and injected opaque instructions. **Resilience** evaluates resistance to automated decompilation and reverse engineering attempts. **Cost** monitors overhead in gas consumption and bytecode size expansion.
 
-- **Potency**: Structural and statistical complexity added (cyclomatic complexity, injected opaque instructions, etc.)
-- **Resilience**: Resistance to automated decompilation and reverse engineering
-- **Cost**: Overhead in gas consumption and bytecode size
-
-Every transform must raise Potency and Resilience above clearly defined thresholds while keeping Cost below the defined threshold, otherwise it is rejected.
+Every transform must raise Potency and Resilience above clearly defined thresholds while keeping Cost below the defined threshold, otherwise it is rejected. This ensures that obfuscation meaningfully improves privacy without creating impractical deployment costs.
 
 ## Installation and Setup
 
-### Prerequisites
-Azoth requires Rust edition 2024, which needs the nightly toolchain:
+Azoth requires Rust edition 2024, which needs the nightly toolchain. Install it with `rustup toolchain install nightly` followed by `rustup default nightly`. 
 
-```bash
-rustup toolchain install nightly
-rustup default nightly
-```
-
-### Building from Source
-```bash
-git clone https://github.com/MiragePrivacy/obfuscator.git
-cd obfuscator
-cargo build --release
-```
-
-### Installing the CLI
-```bash
-cargo install --path crates/cli
-```
+Build from source by cloning the repository at https://github.com/MiragePrivacy/obfuscator.git, entering the directory, and running `cargo build --release`. Install the CLI with `cargo install --path crates/cli`.
 
 ## Usage Guide
 
 ### Basic Commands
 
-#### Decode Bytecode
-Parse and display bytecode instructions:
-```bash
-azoth decode 0x608060405234801561001057600080fd5b50...
-azoth decode @bytecode.hex
-```
+**Decode Bytecode** parses and displays bytecode instructions. Use `azoth decode` followed by either a hex string like `0x608060405234801561001057600080fd5b50...` or a file reference like `@bytecode.hex`.
 
-#### Strip Bytecode
-Isolate runtime code from constructor and auxiliary data:
-```bash
-azoth strip 0x608060405234801561001057600080fd5b50...
-azoth strip @bytecode.hex --raw
-```
+**Strip Bytecode** isolates runtime code from constructor and auxiliary data. The command `azoth strip` accepts the same input formats, with an optional `--raw` flag for binary input.
 
-#### Generate Control Flow Graph
-Create a visual representation of the control flow:
-```bash
-azoth cfg 0x608060405234801561001057600080fd5b50...
-azoth cfg @bytecode.hex -o cfg_output.dot
-```
+**Generate Control Flow Graph** creates a visual representation of the control flow. Use `azoth cfg` with your bytecode input, optionally specifying output with `-o cfg_output.dot`.
 
-#### Obfuscate Bytecode
-Apply obfuscation transforms:
-```bash
-azoth obfuscate 0x608060405234801561001057600080fd5b50...
-azoth obfuscate @bytecode.hex --seed 12345
-```
+**Obfuscate Bytecode** applies the transformation passes. Basic usage is `azoth obfuscate` with your input, optionally specifying a seed with `--seed 12345` for deterministic results.
 
-### Advanced Usage
+### Advanced Configuration
 
-#### Configuring Obfuscation Passes
-```bash
-azoth obfuscate @bytecode.hex \
-  --seed 12345 \
-  --passes "opaque_predicate,shuffle,jump_transform" \
-  --accept-threshold 0.15 \
-  --max-size-delta 0.20 \
-  --emit obfuscated_output.hex
-```
+Configure specific obfuscation passes by listing them with the `--passes` flag. Available transforms include `opaque_predicate` for injecting always-true/false conditions, `shuffle` for reordering basic blocks while preserving semantics, `jump_transform` for modifying jump targets to obscure control flow, and `stack_noise` for adding semantically neutral stack operations.
 
-#### Working with Different Input Formats
-```bash
-# Hex string (with or without 0x prefix)
-azoth obfuscate 608060405234801561001057600080fd5b50...
+Threshold configuration controls when transforms are accepted. The `--accept-threshold` flag sets the minimum improvement required (default 0.1), while `--max-size-delta` limits bytecode size increases (default 0.25).
 
-# File input
-azoth obfuscate @contract.hex
+Working with different input formats is straightforward. Hex strings work with or without the 0x prefix. File input uses the @ prefix like `@contract.hex`. Raw binary input adds the `--raw` flag.
 
-# Raw binary input
-azoth obfuscate @contract.bin --raw
-```
-
-#### Deterministic Compilation
-```bash
-# Same seed always produces identical output
-azoth obfuscate @contract.hex --seed 42
-azoth obfuscate @contract.hex --seed 42  # Identical result
-
-# Different seeds produce different obfuscation
-azoth obfuscate @contract.hex --seed 123
-azoth obfuscate @contract.hex --seed 456  # Different result
-```
-
-### Transform Configuration
-
-#### Available Transforms
-- `opaque_predicate`: Inject always-true/false conditions
-- `shuffle`: Reorder basic blocks while preserving semantics
-- `jump_transform`: Modify jump targets to obscure control flow
-- `stack_noise`: Add semantically neutral stack operations
-
-#### Threshold Configuration
-- `--accept-threshold`: Minimum improvement required to accept a transform (default: 0.1)
-- `--max-size-delta`: Maximum allowed bytecode size increase (default: 0.25)
+Deterministic compilation ensures reproducibility. The same seed always produces identical output, while different seeds create different obfuscation patterns. This allows for controlled experimentation and consistent deployment strategies.
 
 ### Output Options
-```bash
-# Save to file
-azoth obfuscate @contract.hex --emit output.hex
 
-# Display metrics
-azoth obfuscate @contract.hex --verbose
-
-# JSON output format
-azoth obfuscate @contract.hex --format json
-```
+Save results to a file with `--emit output.hex`. Display detailed metrics with `--verbose`. JSON output format is available with `--format json`.
 
 ## Examples
 
 ### Basic ERC20 Obfuscation
-```bash
-# Download sample ERC20 bytecode
-curl -o erc20.hex "https://api.etherscan.io/api?module=proxy&action=eth_getCode&address=0xA0b86a33E6441E1e623A71e86c5e5e8C2A92a0B7"
 
-# Strip and analyze
+```bash
+curl -o erc20.hex "https://api.etherscan.io/api?module=proxy&action=eth_getCode&address=0xA0b86a33E6441E1e623A71e86c5e5e8C2A92a0B7"
 azoth strip @erc20.hex
 azoth cfg @erc20.hex -o erc20_cfg.dot
-
-# Obfuscate with medium strength
 azoth obfuscate @erc20.hex --seed 12345 --emit erc20_obfuscated.hex
 ```
 
 ### High-Strength Obfuscation
+
 ```bash
-azoth obfuscate @contract.hex \
-  --seed 67890 \
-  --passes "opaque_predicate,shuffle,jump_transform,stack_noise" \
-  --accept-threshold 0.20 \
-  --max-size-delta 0.30 \
-  --emit heavily_obfuscated.hex \
-  --verbose
+azoth obfuscate @contract.hex --seed 67890 --passes "opaque_predicate,shuffle,jump_transform,stack_noise" --accept-threshold 0.20 --max-size-delta 0.30 --emit heavily_obfuscated.hex --verbose
 ```
 
 ### Batch Processing
+
 ```bash
-# Process multiple contracts
 for contract in contracts/*.hex; do
   azoth obfuscate "@$contract" --seed 12345 --emit "obfuscated_$(basename $contract)"
 done
@@ -220,49 +95,21 @@ done
 
 ## Development and Testing
 
-### Running Tests
-```bash
-# Run all tests
-cargo test
+Run all tests with `cargo test`. Target specific tests with `cargo test test_opaque_predicate`. End-to-end tests are available with `cargo test --test e2e_erc20`.
 
-# Run specific test
-cargo test test_opaque_predicate
+Maintain code quality with `cargo fmt` for formatting and `cargo clippy` for issue detection. Performance benchmarks run with `cargo bench`.
 
-# Run end-to-end tests
-cargo test --test e2e_erc20
-```
+## Production Readiness
 
-### Code Quality
-```bash
-# Format code
-cargo fmt
-
-# Check for issues
-cargo clippy
-
-# Run benchmarks
-cargo bench
-```
+Azoth is being prepared for production deployment with comprehensive testing of all obfuscation passes, formal verification of semantic equivalence, and extensive benchmarking of gas costs and deployment sizes. We are actively working toward a stable release that will provide enterprise-grade bytecode obfuscation capabilities.
 
 ## Contributing
 
-Azoth is an active research project. We welcome contributions in the form of:
+Azoth welcomes contributions in new obfuscation transforms, improved metrics and analysis, performance optimizations, documentation improvements, and bug reports with fixes. See our contributing guidelines for detailed information.
 
-- New obfuscation transforms
-- Improved metrics and analysis
-- Performance optimizations
-- Documentation improvements
-- Bug reports and fixes
+## Usage in Production
 
-Please see our [contributing guidelines](CONTRIBUTING.md) for more information.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Research and Citations
-
-If you use Azoth in your research, please cite:
+If you use Azoth in your production systems, please cite:
 
 ```bibtex
 @misc{azoth2024,
@@ -276,3 +123,7 @@ If you use Azoth in your research, please cite:
 ## Acknowledgments
 
 Azoth builds upon extensive research in program obfuscation, control flow analysis, and blockchain privacy. We thank the broader research community for their foundational work in these areas.
+
+## License
+
+This project is licensed under the MIT License.
