@@ -1,17 +1,17 @@
 [package]
-name = "bytecloak-cli"
+name = "azoth-cli"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "bytecloak"
+name = "azoth"
 path = "src/main.rs"
 
 [dependencies]
 async-trait.workspace = true
-bytecloak-core = { path = "../core" }
-bytecloak-transform = { path = "../transforms" }
-bytecloak-utils = { path = "../utils" }
+azoth-core = { path = "../core" }
+azoth-transform = { path = "../transforms" }
+azoth-utils = { path = "../utils" }
 clap = { workspace = true, features = ["derive"] }
 hex.workspace = true
 serde_json.workspace = true

@@ -1,9 +1,9 @@
 use crate::util::{PassConfig, Transform};
 use async_trait::async_trait;
-use bytecloak_core::cfg_ir::{Block, CfgIrBundle};
-use bytecloak_core::decoder::Instruction;
-use bytecloak_core::Opcode;
-use bytecloak_utils::errors::TransformError;
+use azoth_core::cfg_ir::{Block, CfgIrBundle};
+use azoth_core::decoder::Instruction;
+use azoth_core::Opcode;
+use azoth_utils::errors::TransformError;
 use petgraph::graph::NodeIndex;
 use rand::seq::SliceRandom;
 use rand::{rngs::StdRng, Rng};
@@ -231,7 +231,7 @@ impl Transform for JumpAddressTransformer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytecloak_core::{cfg_ir, decoder, detection, strip};
+    use azoth_core::{cfg_ir, decoder, detection, strip};
     use rand::SeedableRng;
     use tokio;
 
@@ -252,7 +252,7 @@ mod tests {
         // Count instructions before transformation
         let mut instruction_count_before = 0;
         for node_idx in cfg_ir.cfg.node_indices() {
-            if let bytecloak_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[node_idx]
+            if let azoth_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[node_idx]
             {
                 instruction_count_before += instructions.len();
             }
@@ -273,7 +273,7 @@ mod tests {
         // Count instructions after transformation
         let mut instruction_count_after = 0;
         for node_idx in cfg_ir.cfg.node_indices() {
-            if let bytecloak_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[node_idx]
+            if let azoth_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[node_idx]
             {
                 instruction_count_after += instructions.len();
             }

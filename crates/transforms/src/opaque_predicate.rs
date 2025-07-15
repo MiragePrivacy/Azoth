@@ -1,9 +1,9 @@
 use crate::util::{PassConfig, Transform};
 use async_trait::async_trait;
-use bytecloak_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
-use bytecloak_core::decoder::Instruction;
-use bytecloak_core::Opcode;
-use bytecloak_utils::errors::TransformError;
+use azoth_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
+use azoth_core::decoder::Instruction;
+use azoth_core::Opcode;
+use azoth_utils::errors::TransformError;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rand::prelude::SliceRandom;
@@ -192,8 +192,8 @@ impl Transform for OpaquePredicate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytecloak_analysis::collect_metrics;
-    use bytecloak_core::{cfg_ir, decoder, detection, strip};
+    use azoth_analysis::collect_metrics;
+    use azoth_core::{cfg_ir, decoder, detection, strip};
     use rand::SeedableRng;
     use tokio;
 

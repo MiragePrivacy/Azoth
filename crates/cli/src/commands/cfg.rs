@@ -5,10 +5,10 @@
 /// generates a Graphviz .dot file representing the CFG. The output can be written to a file or
 /// printed to stdout.
 use async_trait::async_trait;
-use bytecloak_core::cfg_ir::{build_cfg_ir, Block, CfgIrBundle, EdgeType};
-use bytecloak_core::decoder::{decode_bytecode, input_to_bytes};
-use bytecloak_core::detection::locate_sections;
-use bytecloak_core::strip::strip_bytecode;
+use azoth_core::cfg_ir::{build_cfg_ir, Block, CfgIrBundle, EdgeType};
+use azoth_core::decoder::{decode_bytecode, input_to_bytes};
+use azoth_core::detection::locate_sections;
+use azoth_core::strip::strip_bytecode;
 use clap::Args;
 use std::error::Error;
 use std::fs;

@@ -40,9 +40,9 @@ bitvec = "1.0.1"
 num-bigint = { version = "0.4.6", features = ["serde"] }
 indexmap = "2.10.0"
 
-# bytecloak
-bytecloak-core = { path = "crates/core" }
-bytecloak-cli = { path = "crates/cli" }
-bytecloak-analysis = { path = "crates/analysis" }
-bytecloak-transform = { path = "crates/transforms" }
-bytecloak-utils = { path = "crates/utils" }
+# azoth
+azoth-core = { path = "crates/core" }
+azoth-cli = { path = "crates/cli" }
+azoth-analysis = { path = "crates/analysis" }
+azoth-transform = { path = "crates/transforms" }
+azoth-utils = { path = "crates/utils" }

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use bytecloak_core::cfg_ir::CfgIrBundle;
-use bytecloak_utils::errors::TransformError;
+use azoth_core::cfg_ir::CfgIrBundle;
+use azoth_utils::errors::TransformError;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 

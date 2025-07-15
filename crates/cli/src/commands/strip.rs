@@ -4,9 +4,9 @@
 /// auxdata), and outputs either the cleaned runtime bytecode as a hex string or a JSON report
 /// detailing the stripping process.
 use async_trait::async_trait;
-use bytecloak_core::decoder::{decode_bytecode, input_to_bytes};
-use bytecloak_core::detection::locate_sections;
-use bytecloak_core::strip::strip_bytecode;
+use azoth_core::decoder::{decode_bytecode, input_to_bytes};
+use azoth_core::detection::locate_sections;
+use azoth_core::strip::strip_bytecode;
 use clap::Args;
 use serde_json;
 use std::error::Error;

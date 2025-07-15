@@ -5,18 +5,18 @@
 /// shuffle, jump_transform, opaque-predicates), and outputs the obfuscated bytecode. It also
 /// generates a gas and size report if requested.
 use async_trait::async_trait;
-use bytecloak_core::{
+use azoth_core::{
     cfg_ir::Block,
     decoder::{decode_bytecode, Instruction},
     detection::locate_sections,
     encoder::{encode_with_original, rebuild},
     strip::strip_bytecode,
 };
-use bytecloak_transform::{
+use azoth_transform::{
     pass,
     util::{PassConfig, Transform},
 };
-use bytecloak_utils::errors::ObfuscateError;
+use azoth_utils::errors::ObfuscateError;
 use clap::Args;
 use serde_json::json;
 use std::collections::HashSet;
@@ -108,7 +108,7 @@ impl super::Command for ObfuscateArgs {
         let sections = locate_sections(&bytes, &instructions, &info)?;
         let (clean_runtime, clean_report) = strip_bytecode(&bytes, &sections)?;
         let original_len = clean_runtime.len();
-        let mut cfg_ir = bytecloak_core::cfg_ir::build_cfg_ir(
+        let mut cfg_ir = azoth_core::cfg_ir::build_cfg_ir(
             &instructions,
             &sections,
             &bytes,
@@ -212,15 +212,15 @@ fn build_passes(list: &str) -> Result<Vec<Box<dyn Transform>>, Box<dyn Error>> {
     list.split(',')
         .filter(|s| !s.is_empty())
         .map(|name| match name.trim() {
-            "shuffle" => Ok(Box::new(bytecloak_transform::shuffle::Shuffle) as Box<dyn Transform>),
+            "shuffle" => Ok(Box::new(azoth_transform::shuffle::Shuffle) as Box<dyn Transform>),
             "opaque_pred" | "opaque_predicate" => Ok(Box::new(
-                bytecloak_transform::opaque_predicate::OpaquePredicate::new(PassConfig {
+                azoth_transform::opaque_predicate::OpaquePredicate::new(PassConfig {
                     max_opaque_ratio: 0.5,
                     ..Default::default()
                 }),
             ) as Box<dyn Transform>),
             "jump_transform" | "jump_addr" => Ok(Box::new(
-                bytecloak_transform::jump_address_transformer::JumpAddressTransformer::new(
+                azoth_transform::jump_address_transformer::JumpAddressTransformer::new(
                     PassConfig::default(),
                 ),
             ) as Box<dyn Transform>),

@@ -32,8 +32,8 @@ pub struct CertificateMetadata {
     pub timestamp: u64,
     /// Unique certificate ID
     pub certificate_id: String,
-    /// ByteCloak version used
-    pub bytecloak_version: String,
+    /// Azoth version used
+    pub azoth_version: String,
 }
 
 /// Information about the contracts being verified
@@ -146,7 +146,7 @@ impl VerificationCertificate {
             version: "1.0".to_string(),
             timestamp,
             certificate_id,
-            bytecloak_version: env!("CARGO_PKG_VERSION").to_string(),
+            azoth_version: env!("CARGO_PKG_VERSION").to_string(),
         };
 
         // Create contract info
