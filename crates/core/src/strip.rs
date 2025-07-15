@@ -207,7 +207,7 @@ mod tests {
             crate::decoder::decode_bytecode(&format!("0x{}", hex::encode(&bytecode)), false)
                 .await
                 .unwrap();
-        let sections = detection::locate_sections(&bytecode, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytecode, &instructions).unwrap();
 
         let (clean_runtime, report) = strip_bytecode(&bytecode, &sections).unwrap();
         let rebuilt = report.reassemble(&clean_runtime);
@@ -232,7 +232,7 @@ mod tests {
             crate::decoder::decode_bytecode(&format!("0x{}", hex::encode(&bytecode)), false)
                 .await
                 .unwrap();
-        let sections = detection::locate_sections(&bytecode, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytecode, &instructions).unwrap();
 
         let (clean_runtime, report) = strip_bytecode(&bytecode, &sections).unwrap();
         let rebuilt = report.reassemble(&clean_runtime);

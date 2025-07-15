@@ -130,7 +130,7 @@ async fn apply_mirage_obfuscation(
 
     // Decode and analyze bytecode
     let (instructions, info, _) = decoder::decode_bytecode(&hex_input, false).await?;
-    let sections = detection::locate_sections(bytecode, &instructions, &info)?;
+    let sections = detection::locate_sections(bytecode, &instructions)?;
     let (_clean_runtime, clean_report) = strip::strip_bytecode(bytecode, &sections)?;
     let mut cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, bytecode, clean_report)?;
 

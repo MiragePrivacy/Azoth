@@ -105,7 +105,7 @@ impl super::Command for ObfuscateArgs {
             println!();
         }
 
-        let sections = locate_sections(&bytes, &instructions, &info)?;
+        let sections = locate_sections(&bytes, &instructions)?;
         let (clean_runtime, clean_report) = strip_bytecode(&bytes, &sections)?;
         let original_len = clean_runtime.len();
         let mut cfg_ir = bytecloak_core::cfg_ir::build_cfg_ir(

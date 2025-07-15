@@ -245,7 +245,7 @@ mod tests {
         let bytecode = "0x60085760015b00"; // PUSH1 0x08, JUMPI, PUSH1 0x01, JUMPDEST, STOP
         let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytes, &instructions).unwrap();
         let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
         let mut cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report).unwrap();
 
