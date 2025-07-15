@@ -169,6 +169,107 @@ impl CfgIrBundle {
     }
 }
 
+/// Collects jump targets from PUSHn followed by JUMP/JUMPI instruction pairs.
+///
+/// Iterates through instructions to identify static jump targets where a PUSH instruction
+/// is immediately followed by a JUMP or JUMPI instruction. Parses the immediate value
+/// of the PUSH instruction as the jump target address.
+///
+/// # Arguments
+/// * `instructions` - Decoded EVM instructions to analyze.
+///
+/// # Returns
+/// A vector of program counters representing static jump targets.
+fn collect_jump_targets(instructions: &[Instruction]) -> Vec<usize> {
+    let mut targets = Vec::new();
+    let mut prev_instr: Option<&Instruction> = None;
+
+    for instr in instructions {
+        if let Some(prev) = prev_instr {
+            if prev.opcode.starts_with("PUSH") && matches!(instr.opcode.as_str(), "JUMP" | "JUMPI")
+            {
+                if let Some(imm) = &prev.imm {
+                    if let Ok(target_pc) = usize::from_str_radix(imm, 16) {
+                        tracing::debug!("Found jump target: pc={}", target_pc);
+                        targets.push(target_pc);
+                    }
+                }
+            }
+        }
+        prev_instr = Some(instr);
+    }
+
+    targets
+}
+
+/// Validates jump targets against valid program counters and bytecode constraints.
+///
+/// Filters the provided jump targets to ensure they point to valid JUMPDEST instructions
+/// within the bytecode bounds. Also ensures no duplicate blocks are created for the same
+/// program counter.
+///
+/// # Arguments
+/// * `targets` - Raw jump targets to validate.
+/// * `valid_pcs` - Set of valid program counters from the instruction stream.
+/// * `bytecode` - Raw bytecode bytes for opcode validation.
+/// * `existing_blocks` - Current blocks to check for duplicates.
+///
+/// # Returns
+/// A vector of validated jump targets that can be used to create blocks.
+fn validate_jump_targets(
+    targets: &[usize],
+    valid_pcs: &HashSet<usize>,
+    bytecode: &[u8],
+    existing_blocks: &[Block],
+) -> Vec<usize> {
+    targets
+        .iter()
+        .filter(|&&tgt| {
+            let is_valid = valid_pcs.contains(&tgt)
+                && tgt < bytecode.len()
+                && bytecode[tgt] == 0x5b // JUMPDEST opcode
+                && existing_blocks.iter().all(|b| {
+                    if let Block::Body { start_pc, .. } = b {
+                        *start_pc != tgt
+                    } else {
+                        true
+                    }
+                });
+            
+            if is_valid {
+                tracing::debug!("Creating block for jump target at pc={}", tgt);
+            } else {
+                tracing::debug!("Skipping invalid jump target at pc={}", tgt);
+            }
+            
+            is_valid
+        })
+        .copied()
+        .collect()
+}
+
+/// Creates blocks for validated jump targets.
+///
+/// Generates `Block::Body` instances for each validated jump target, initializing
+/// them with empty instruction vectors and zero stack heights. These blocks represent
+/// potential entry points for static jumps.
+///
+/// # Arguments
+/// * `targets` - Validated jump targets from `validate_jump_targets`.
+///
+/// # Returns
+/// A vector of `Block::Body` instances for the jump targets.
+fn create_blocks_for_targets(targets: &[usize]) -> Vec<Block> {
+    targets
+        .iter()
+        .map(|&tgt| Block::Body {
+            start_pc: tgt,
+            instructions: Vec::new(),
+            max_stack: 0,
+        })
+        .collect()
+}
+
 /// Splits instructions into blocks at JUMPDEST, terminal opcodes, or valid static PUSH-JUMP
 /// targets.
 ///
@@ -189,14 +290,15 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
         instructions: Vec::new(),
         max_stack: 0,
     };
-    let mut static_jump_targets = Vec::new();
     let mut valid_pcs = HashSet::new();
-    let mut prev_instr: Option<&Instruction> = None;
 
     tracing::debug!(
         "Starting block splitting with {} instructions",
         instructions.len()
     );
+
+    // Collect jump targets first
+    let static_jump_targets = collect_jump_targets(instructions);
 
     for instr in instructions {
         valid_pcs.insert(instr.pc);
@@ -205,19 +307,6 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
             instr.pc,
             instr.opcode
         );
-
-        // Collect jump targets for PUSHn followed by JUMP/JUMPI
-        if let Some(prev) = prev_instr {
-            if prev.opcode.starts_with("PUSH") && matches!(instr.opcode.as_str(), "JUMP" | "JUMPI")
-            {
-                if let Some(imm) = &prev.imm {
-                    if let Ok(target_pc) = usize::from_str_radix(imm, 16) {
-                        tracing::debug!("Found jump target: pc={}", target_pc);
-                        static_jump_targets.push(target_pc);
-                    }
-                }
-            }
-        }
 
         // 1. Split before a JUMPDEST only if current block is non-empty
         if instr.opcode == "JUMPDEST" {
@@ -280,11 +369,8 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
                 );
             }
             blocks.push(finished);
-            prev_instr = None;
             continue;
         }
-
-        prev_instr = Some(instr);
     }
 
     // 4. Push trailing non-empty block
@@ -310,29 +396,10 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
         }
     }
 
-    // 5. Create blocks for static jump targets at valid PCs that are JUMPDEST
-    for tgt in &static_jump_targets {
-        if valid_pcs.contains(tgt)
-            && *tgt < bytecode.len()
-            && bytecode[*tgt] == 0x5b // JUMPDEST opcode
-            && blocks.iter().all(|b| {
-                if let Block::Body { start_pc, .. } = b {
-                    *start_pc != *tgt
-                } else {
-                    true
-                }
-            })
-        {
-            tracing::debug!("Creating block for jump target at pc={}", tgt);
-            blocks.push(Block::Body {
-                start_pc: *tgt,
-                instructions: Vec::new(),
-                max_stack: 0,
-            });
-        } else {
-            tracing::debug!("Skipping invalid jump target at pc={}", tgt);
-        }
-    }
+    // 5. Create blocks for validated jump targets
+    let validated_targets = validate_jump_targets(&static_jump_targets, &valid_pcs, bytecode, &blocks);
+    let target_blocks = create_blocks_for_targets(&validated_targets);
+    blocks.extend(target_blocks);
 
     tracing::debug!(
         "Finished splitting: {} blocks created: {:?}",
