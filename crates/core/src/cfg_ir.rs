@@ -8,7 +8,7 @@
 /// accurate block splitting and edge construction based on control flow opcodes.
 use crate::decoder::Instruction;
 use crate::detection::Section;
-use bytecloak_utils::errors::CfgIrError;
+use azoth_utils::errors::CfgIrError;
 use petgraph::graph::{DiGraph, NodeIndex};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

@@ -3,7 +3,7 @@
 /// This module processes input bytecode and outputs both the raw assembly from the Heimdall
 /// disassembler and a structured list of instructions with program counters and opcodes.
 use async_trait::async_trait;
-use bytecloak_core::decoder::decode_bytecode;
+use azoth_core::decoder::decode_bytecode;
 use clap::Args;
 use std::error::Error;
 use std::path::Path;

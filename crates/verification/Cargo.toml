@@ -1,5 +1,5 @@
 [package]
-name = "bytecloak-verification"
+name = "azoth-verification"
 version.workspace = true
 edition.workspace = true
 
@@ -24,9 +24,9 @@ indexmap.workspace = true
 petgraph.workspace = true
 eot.workspace = true
 
-# bytecloak
-bytecloak-core.workspace = true
-bytecloak-utils.workspace = true
+# azoth
+azoth-core.workspace = true
+azoth-utils.workspace = true
 
 [features]
 default = ["formal-verification"]

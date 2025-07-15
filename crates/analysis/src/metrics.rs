@@ -16,9 +16,9 @@
 /// let metrics = metrics::collect_metrics(&cfg_ir, &report).unwrap();
 /// println!("{}", serde_json::to_string_pretty(&metrics).unwrap());
 /// ```
-use bytecloak_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
-use bytecloak_core::strip::CleanReport;
-use bytecloak_utils::errors::MetricsError;
+use azoth_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
+use azoth_core::strip::CleanReport;
+use azoth_utils::errors::MetricsError;
 use petgraph::{
     algo::dominators::simple_fast,
     graph::{DiGraph, NodeIndex},
@@ -223,8 +223,8 @@ pub fn compare(before: &Metrics, after: &Metrics) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytecloak_core::{cfg_ir, decoder, detection, strip};
-    use bytecloak_utils::errors::DecodeError;
+    use azoth_core::{cfg_ir, decoder, detection, strip};
+    use azoth_utils::errors::DecodeError;
     use petgraph::graph::NodeIndex;
     use tokio;
 

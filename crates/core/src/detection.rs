@@ -15,7 +15,7 @@
 /// assert!(!sections.is_empty());
 /// ```
 use crate::decoder::{DecodeInfo, Instruction};
-use bytecloak_utils::errors::DetectError;
+use azoth_utils::errors::DetectError;
 use serde::{Deserialize, Serialize};
 
 /// Represents the type of a bytecode section.

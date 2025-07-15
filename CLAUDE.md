@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Bytecloak is a research-grade toolchain for Ethereum smart-contract obfuscation. The project follows a three-stage pipeline:
+Azoth is a research-grade toolchain for Ethereum smart-contract obfuscation. The project follows a three-stage pipeline:
 
 **Repository**: https://github.com/MiragePrivacy/obfuscator
 
@@ -19,7 +19,7 @@ This is a Rust workspace with four main crates:
 - **`crates/core/`**: Core functionality including bytecode loader, detector, stripper, and IR/CFG generation
 - **`crates/analysis/`**: Analysis utilities including dominators, metrics, and pattern mining
 - **`crates/transforms/`**: Obfuscation passes (opaque predicates, shuffling, stack noise)
-- **`crates/cli/`**: Command-line interface (`bytecloak` binary)
+- **`crates/cli/`**: Command-line interface (`azoth` binary)
 
 ## Development Requirements
 
@@ -55,13 +55,13 @@ cargo clippy
 ### CLI Usage
 ```bash
 # Build CLI binary
-cargo build --bin bytecloak
+cargo build --bin azoth
 
 # Run CLI commands
-cargo run --bin bytecloak -- decode <bytecode>
-cargo run --bin bytecloak -- strip <bytecode>
-cargo run --bin bytecloak -- cfg <bytecode>
-cargo run --bin bytecloak -- obfuscate <bytecode>
+cargo run --bin azoth -- decode <bytecode>
+cargo run --bin azoth -- strip <bytecode>
+cargo run --bin azoth -- cfg <bytecode>
+cargo run --bin azoth -- obfuscate <bytecode>
 ```
 
 ### Input Formats
@@ -137,7 +137,7 @@ Write documentation in clear, professional prose rather than fragmented bullet p
 /// # Examples
 ///
 /// ```rust
-/// use bytecloak_core::cfg_ir::build_cfg_ir;
+/// use azoth_core::cfg_ir::build_cfg_ir;
 /// 
 /// let (instructions, info, _) = decode_bytecode("0x6001600155", false).await?;
 /// let sections = locate_sections(&bytecode, &instructions, &info)?;

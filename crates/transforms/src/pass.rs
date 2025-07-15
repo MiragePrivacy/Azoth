@@ -1,8 +1,8 @@
 use crate::util::{PassConfig, Transform};
 use async_trait::async_trait;
-use bytecloak_analysis::{collect_metrics, compare};
-use bytecloak_core::cfg_ir::CfgIrBundle;
-use bytecloak_utils::errors::TransformError;
+use azoth_analysis::{collect_metrics, compare};
+use azoth_core::cfg_ir::CfgIrBundle;
+use azoth_utils::errors::TransformError;
 use rand::{rngs::StdRng, SeedableRng};
 use tracing::info;
 

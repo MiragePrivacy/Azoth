@@ -1,4 +1,4 @@
-## bytecloak-verification
+## azoth-verification
 
 This crate provides mathematical guarantees that obfuscated smart contracts behave identically to their original versions. When we obfuscate bytecode, we fundamentally alter its structure while preserving functionality. Formal verification uses mathematical proofs to ensure this preservation is complete and correct.
 

@@ -1,7 +1,7 @@
 //! Mirage Privacy Protocol - Obfuscation Workflow
 
-use bytecloak_core::{cfg_ir, decoder, detection, encoder, strip};
-use bytecloak_transform::{pass, util::PassConfig};
+use azoth_core::{cfg_ir, decoder, detection, encoder, strip};
+use azoth_transform::{pass, util::PassConfig};
 use serde_json::json;
 use std::fs;
 
@@ -150,18 +150,16 @@ async fn apply_mirage_obfuscation(
 }
 
 /// Create Mirage-specific transform pipeline
-fn create_mirage_transforms() -> Vec<Box<dyn bytecloak_transform::util::Transform>> {
+fn create_mirage_transforms() -> Vec<Box<dyn azoth_transform::util::Transform>> {
     vec![
-        Box::new(bytecloak_transform::shuffle::Shuffle),
+        Box::new(azoth_transform::shuffle::Shuffle),
         Box::new(
-            bytecloak_transform::jump_address_transformer::JumpAddressTransformer::new(
-                PassConfig {
-                    max_size_delta: 0.2,
-                    ..Default::default()
-                },
-            ),
+            azoth_transform::jump_address_transformer::JumpAddressTransformer::new(PassConfig {
+                max_size_delta: 0.2,
+                ..Default::default()
+            }),
         ),
-        Box::new(bytecloak_transform::opaque_predicate::OpaquePredicate::new(
+        Box::new(azoth_transform::opaque_predicate::OpaquePredicate::new(
             PassConfig {
                 max_opaque_ratio: 0.3,
                 ..Default::default()
@@ -182,11 +180,11 @@ fn create_mirage_config() -> PassConfig {
 
 /// Extract instructions from CFG in order
 fn extract_instructions_from_cfg(
-    cfg_ir: &bytecloak_core::cfg_ir::CfgIrBundle,
-) -> Vec<bytecloak_core::decoder::Instruction> {
+    cfg_ir: &azoth_core::cfg_ir::CfgIrBundle,
+) -> Vec<azoth_core::decoder::Instruction> {
     let mut instructions = Vec::new();
     for node in cfg_ir.cfg.node_indices() {
-        if let bytecloak_core::cfg_ir::Block::Body {
+        if let azoth_core::cfg_ir::Block::Body {
             instructions: block_ins,
             ..
         } = &cfg_ir.cfg[node]

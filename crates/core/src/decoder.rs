@@ -1,5 +1,5 @@
-//! bytecloak’s single entry-point for turning byte-sequences into Heimdall instruction streams.
-use bytecloak_utils::errors::DecodeError;
+//! azoth's single entry-point for turning byte-sequences into Heimdall instruction streams.
+use azoth_utils::errors::DecodeError;
 use heimdall::{DisassemblerArgsBuilder, disassemble};
 use hex::FromHex;
 use std::{fmt, fs, path::Path};
@@ -49,7 +49,60 @@ pub fn input_to_bytes(input: &str, is_file: bool) -> Result<Vec<u8>, DecodeError
     }
 }
 
+/// Decodes raw EVM bytecode from bytes into an instruction stream with metadata and raw assembly.
+///
+/// This is the core decoding function that operates directly on byte slices, making it more
+/// generic and suitable for use throughout the core crate without file I/O dependencies.
+///
+/// # Arguments
+/// * `bytes` - The raw EVM bytecode bytes to decode.
+/// * `source` - The source type indicating how the bytes were obtained.
+///
+/// # Returns
+/// A tuple of (InstructionStream, DecodeInfo, raw assembly string), or an error if decoding fails.
+pub async fn decode_bytecode_from_bytes(
+    bytes: &[u8],
+    source: SourceType,
+) -> Result<(Vec<Instruction>, DecodeInfo, String), DecodeError> {
+    // 1. Compute metadata
+    let byte_length = bytes.len();
+    let mut keccak = Keccak::v256();
+    keccak.update(bytes);
+    let mut hash = [0u8; 32];
+    keccak.finalize(&mut hash);
+
+    // 2. Configure and run heimdall disassembly
+    let target_arg = format!("0x{}", hex::encode(bytes));
+
+    let args = DisassemblerArgsBuilder::new()
+        .target(target_arg)
+        .output("print".into())
+        .decimal_counter(false) // Hexadecimal PCs
+        .build()
+        .map_err(|e| DecodeError::Heimdall(e.to_string()))?;
+
+    let asm = disassemble(args)
+        .await
+        .map_err(|e| DecodeError::Heimdall(e.to_string()))?;
+
+    // 3. Parse assembly into structured instructions
+    let instructions = parse_assembly(&asm)?;
+
+    Ok((
+        instructions,
+        DecodeInfo {
+            byte_length,
+            keccak_hash: hash,
+            source,
+        },
+        asm,
+    ))
+}
+
 /// Decodes raw EVM bytecode into an instruction stream with metadata and raw assembly.
+///
+/// This is a convenience wrapper around `decode_bytecode_from_bytes` that handles
+/// input normalization from hex strings or file paths.
 ///
 /// # Arguments
 /// * `input` - A hex string or file path representing the EVM bytecode.
@@ -64,44 +117,15 @@ pub async fn decode_bytecode(
     // 1. Normalize input to bytes
     let bytes = input_to_bytes(input, is_file)?;
 
-    // 2. Compute metadata
-    let byte_length = bytes.len();
-    let mut keccak = Keccak::v256();
-    keccak.update(&bytes);
-    let mut hash = [0u8; 32];
-    keccak.finalize(&mut hash);
+    // 2. Determine source type
     let source = if is_file {
         SourceType::File
     } else {
         SourceType::HexString
     };
 
-    // 3. Configure and run heimdall disassembly
-    let target_arg = format!("0x{}", hex::encode(&bytes));
-
-    let args = DisassemblerArgsBuilder::new()
-        .target(target_arg)
-        .output("print".into())
-        .decimal_counter(false) // Hexadecimal PCs
-        .build()
-        .map_err(|e| DecodeError::Heimdall(e.to_string()))?;
-
-    let asm = disassemble(args)
-        .await
-        .map_err(|e| DecodeError::Heimdall(e.to_string()))?;
-
-    // 4. Parse assembly into structured instructions
-    let instructions = parse_assembly(&asm)?;
-
-    Ok((
-        instructions,
-        DecodeInfo {
-            byte_length,
-            keccak_hash: hash,
-            source,
-        },
-        asm,
-    ))
+    // 3. Delegate to the core decoding function
+    decode_bytecode_from_bytes(&bytes, source).await
 }
 
 /// Parses the assembly string into a vector of Instructions.
@@ -200,6 +224,34 @@ mod tests {
 
         assert_eq!(info.source, SourceType::HexString);
         assert!(!info.keccak_hash.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_decode_from_bytes() {
+        let bytes = hex::decode(BYTECODE.trim_start_matches("0x")).unwrap();
+        let (ins, info, asm) = decode_bytecode_from_bytes(&bytes, SourceType::HexString)
+            .await
+            .unwrap();
+
+        tracing::debug!("\nRaw assembly from bytes:\n{}", asm);
+        tracing::debug!("Parsed instructions from bytes:");
+        for instr in &ins {
+            tracing::debug!("{}", instr);
+        }
+        assert_eq!(ins.len(), 5);
+
+        assert_eq!(info.byte_length, bytes.len());
+        assert_eq!(info.source, SourceType::HexString);
+        assert!(!info.keccak_hash.is_empty());
+
+        // Test with different source type
+        let (ins2, info2, _) = decode_bytecode_from_bytes(&bytes, SourceType::File)
+            .await
+            .unwrap();
+        assert_eq!(ins2, ins); // Instructions should be identical
+        assert_eq!(info2.byte_length, info.byte_length);
+        assert_eq!(info2.keccak_hash, info.keccak_hash);
+        assert_eq!(info2.source, SourceType::File); // Source should be different
     }
 
     #[tokio::test]

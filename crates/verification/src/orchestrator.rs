@@ -31,7 +31,7 @@ pub struct CombinedVerificationResult {
 impl VerificationEngine {
     /// Create a new verification engine
     pub async fn new(config: VerificationConfig) -> VerificationResult<Self> {
-        info!("Initializing ByteCloak verification engine");
+        info!("Initializing Azoth verification engine");
 
         // Validate configuration
         config.validate()?;

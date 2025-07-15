@@ -15,7 +15,7 @@
 /// assert_eq!(bytes, rebuilt);
 /// ```
 use crate::detection::{Section, SectionKind};
-use bytecloak_utils::errors::StripError;
+use azoth_utils::errors::StripError;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 

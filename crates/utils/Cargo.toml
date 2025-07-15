@@ -1,5 +1,5 @@
 [package]
-name = "bytecloak-utils"
+name = "azoth-utils"
 version.workspace = true
 edition.workspace = true
 

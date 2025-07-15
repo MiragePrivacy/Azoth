@@ -5,9 +5,9 @@
 //! symbolic execution, and property synthesis.
 
 use crate::{VerificationError, VerificationResult};
-use bytecloak_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
-use bytecloak_core::decoder::Instruction;
-use bytecloak_core::{cfg_ir, decoder, detection, strip, Opcode};
+use azoth_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
+use azoth_core::decoder::Instruction;
+use azoth_core::{cfg_ir, decoder, detection, strip, Opcode};
 use petgraph::visit::EdgeRef;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1218,8 +1218,8 @@ impl SemanticAnalyzer {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use bytecloak_core::cfg_ir::CfgIrBundle;
-    use bytecloak_core::strip::CleanReport;
+    use azoth_core::cfg_ir::CfgIrBundle;
+    use azoth_core::strip::CleanReport;
     use petgraph::Graph;
 
     // todo(g4titanx): impl. default for cleanreport

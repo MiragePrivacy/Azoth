@@ -1,10 +1,10 @@
 [package]
-name = "bytecloak-core"
+name = "azoth-core"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bytecloak-utils = { path = "../utils" }
+azoth-utils = { path = "../utils" }
 hex.workspace = true
 heimdall.workspace = true
 serde.workspace = true

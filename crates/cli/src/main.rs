@@ -3,23 +3,23 @@
 /// This module parses command-line arguments and dispatches to subcommands for decoding,
 /// stripping, CFG visualization, or obfuscating EVM bytecode. It initializes logging and
 /// handles the main execution flow.
-use bytecloak_cli::commands::{Cmd, Command};
+use azoth_cli::commands::{Cmd, Command};
 use clap::Parser;
 
-/// Byteckcloak CLI
+/// Azoth CLI
 ///
-/// Bytecloak is an EVM bytecode obfuscator that supports decoding bytecode to assembly,
+/// Azoth is an EVM bytecode obfuscator that supports decoding bytecode to assembly,
 /// stripping non-runtime sections, generating control flow graphs, and applying obfuscation
 /// transforms
 #[derive(Parser)]
-#[command(name = "bytecloak")]
-#[command(about = "Bytecloak: EVM bytecode obfuscator")]
+#[command(name = "azoth")]
+#[command(about = "Azoth: EVM bytecode obfuscator")]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
 }
 
-/// Runs the Bytecloak CLI with the provided arguments.
+/// Runs the Azoth CLI with the provided arguments.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()

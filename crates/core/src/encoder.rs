@@ -9,7 +9,7 @@ use crate::Opcode;
 /// compatibility with the opcodes defined in the `opcode` module.
 use crate::decoder::Instruction;
 use crate::strip::CleanReport;
-use bytecloak_utils::errors::EncodeError;
+use azoth_utils::errors::EncodeError;
 use hex;
 use std::str::FromStr;
 
