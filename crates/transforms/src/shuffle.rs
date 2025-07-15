@@ -82,41 +82,8 @@ impl Transform for Shuffle {
 
 impl Shuffle {
     fn instruction_size(&self, instr: &Instruction) -> usize {
-        let (_opcode, imm_size) = match instr.opcode.as_str() {
-            "PUSH1" => Opcode::parse(0x60),
-            "PUSH2" => Opcode::parse(0x61),
-            "PUSH3" => Opcode::parse(0x62),
-            "PUSH4" => Opcode::parse(0x63),
-            "PUSH5" => Opcode::parse(0x64),
-            "PUSH6" => Opcode::parse(0x65),
-            "PUSH7" => Opcode::parse(0x66),
-            "PUSH8" => Opcode::parse(0x67),
-            "PUSH9" => Opcode::parse(0x68),
-            "PUSH10" => Opcode::parse(0x69),
-            "PUSH11" => Opcode::parse(0x6a),
-            "PUSH12" => Opcode::parse(0x6b),
-            "PUSH13" => Opcode::parse(0x6c),
-            "PUSH14" => Opcode::parse(0x6d),
-            "PUSH15" => Opcode::parse(0x6e),
-            "PUSH16" => Opcode::parse(0x6f),
-            "PUSH17" => Opcode::parse(0x70),
-            "PUSH18" => Opcode::parse(0x71),
-            "PUSH19" => Opcode::parse(0x72),
-            "PUSH20" => Opcode::parse(0x73),
-            "PUSH21" => Opcode::parse(0x74),
-            "PUSH22" => Opcode::parse(0x75),
-            "PUSH23" => Opcode::parse(0x76),
-            "PUSH24" => Opcode::parse(0x77),
-            "PUSH25" => Opcode::parse(0x78),
-            "PUSH26" => Opcode::parse(0x79),
-            "PUSH27" => Opcode::parse(0x7a),
-            "PUSH28" => Opcode::parse(0x7b),
-            "PUSH29" => Opcode::parse(0x7c),
-            "PUSH30" => Opcode::parse(0x7d),
-            "PUSH31" => Opcode::parse(0x7e),
-            "PUSH32" => Opcode::parse(0x7f),
-            _ => (Opcode::UNKNOWN(0), 0),
-        };
+        let (_opcode, imm_size) = crate::util::parse_push_opcode(instr.opcode.as_str())
+            .unwrap_or((Opcode::UNKNOWN(0), 0));
         1 + imm_size
     }
 }
