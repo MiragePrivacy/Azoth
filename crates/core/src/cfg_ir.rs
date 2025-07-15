@@ -253,10 +253,7 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
         }
 
         // 3. Seal after every terminal
-        if matches!(
-            instr.opcode.as_str(),
-            "STOP" | "RETURN" | "REVERT" | "SELFDESTRUCT" | "INVALID" | "JUMP" | "JUMPI"
-        ) {
+        if crate::is_block_ending_opcode(instr.opcode.as_str()) {
             let finished = std::mem::replace(
                 &mut cur_block,
                 Block::Body {
@@ -477,7 +474,7 @@ fn build_edges(
                         }
                     }
                 }
-                "STOP" | "RETURN" | "REVERT" | "SELFDESTRUCT" | "INVALID" => {
+                opcode if crate::is_terminal_opcode(opcode) => {
                     let exit_idx = NodeIndex::new(cfg.node_count() - 1);
                     edges.push((start_idx, exit_idx, EdgeType::Fallthrough));
                 }

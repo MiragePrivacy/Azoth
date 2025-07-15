@@ -290,12 +290,7 @@ fn detect_padding(instructions: &[Instruction], aux_offset: usize) -> Option<(us
         .iter()
         .rev()
         .skip_while(|instr| instr.opcode == "STOP")
-        .find(|instr| {
-            matches!(
-                instr.opcode.as_str(),
-                "STOP" | "RETURN" | "REVERT" | "INVALID" | "SELFDESTRUCT"
-            )
-        });
+        .find(|instr| crate::is_terminal_opcode(instr.opcode.as_str()));
     last_terminal.and_then(|instr| {
         let pad_offset = instr.pc + 1;
         if pad_offset < aux_offset {
