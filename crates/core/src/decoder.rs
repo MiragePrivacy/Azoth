@@ -200,6 +200,40 @@ impl fmt::Display for Instruction {
     }
 }
 
+impl Instruction {
+    /// Returns the number of bytes this instruction occupies in bytecode.
+    ///
+    /// This version includes validation and handles edge cases.
+    #[inline]
+    pub fn byte_size(&self) -> usize {
+        match self.opcode.as_str() {
+            // Handle PUSH0 specifically (introduced in Shanghai fork)
+            "PUSH0" => 1, // PUSH0 has no immediate data
+
+            // Handle PUSH1-PUSH32
+            opcode if opcode.starts_with("PUSH") => {
+                if let Some(size_str) = opcode.strip_prefix("PUSH") {
+                    match size_str.parse::<usize>() {
+                        Ok(push_size) if (1..=32).contains(&push_size) => {
+                            1 + push_size // opcode byte + immediate bytes
+                        }
+                        _ => {
+                            // Invalid PUSH size - shouldn't happen with valid bytecode
+                            tracing::warn!("Invalid PUSH opcode: {}", opcode);
+                            1 // Fallback to single byte
+                        }
+                    }
+                } else {
+                    1 // Fallback
+                }
+            }
+
+            // All other EVM instructions are single-byte
+            _ => 1,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
