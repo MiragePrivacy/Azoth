@@ -5,8 +5,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use bytecloak_core::{cfg_ir, decoder, detection, strip};
-use bytecloak_transform::{
+use azoth_core::{cfg_ir, decoder, detection, strip};
+use azoth_transform::{
     jump_address_transformer::JumpAddressTransformer,
     opaque_predicate::OpaquePredicate,
     pass::run,
@@ -117,7 +117,7 @@ async fn main() {
         );
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    info!("ByteCloak API server starting on {}", addr);
+    info!("azoth API server starting on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
@@ -126,7 +126,7 @@ async fn main() {
 async fn health_check() -> ResponseJson<serde_json::Value> {
     ResponseJson(serde_json::json!({
         "status": "healthy",
-        "service": "bytecloak-api",
+        "service": "azoth-api",
         "version": env!("CARGO_PKG_VERSION"),
         "features": {
             "shuffle": true,
@@ -253,7 +253,7 @@ async fn perform_obfuscation(
         .cfg
         .node_indices()
         .filter_map(|n| {
-            if let bytecloak_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[n] {
+            if let azoth_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[n] {
                 Some(instructions.len())
             } else {
                 None
@@ -301,7 +301,7 @@ async fn perform_obfuscation(
         .cfg
         .node_indices()
         .filter_map(|n| {
-            if let bytecloak_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[n] {
+            if let azoth_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[n] {
                 Some(instructions.len())
             } else {
                 None
@@ -323,7 +323,7 @@ async fn perform_obfuscation(
     if let Some(entry_idx) = cfg_ir
         .cfg
         .node_indices()
-        .find(|&n| matches!(cfg_ir.cfg[n], bytecloak_core::cfg_ir::Block::Entry))
+        .find(|&n| matches!(cfg_ir.cfg[n], azoth_core::cfg_ir::Block::Entry))
     {
         queue.push_back(entry_idx);
     }
@@ -335,7 +335,7 @@ async fn perform_obfuscation(
         }
         visited.insert(current);
 
-        if let bytecloak_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[current] {
+        if let azoth_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[current] {
             all_instructions.extend(instructions.clone());
         }
 
@@ -350,8 +350,7 @@ async fn perform_obfuscation(
     // If BFS didn't work (shouldn't happen), fall back to collecting all instructions
     if all_instructions.is_empty() {
         for node_idx in cfg_ir.cfg.node_indices() {
-            if let bytecloak_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[node_idx]
-            {
+            if let azoth_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[node_idx] {
                 all_instructions.extend(instructions.clone());
             }
         }
@@ -362,7 +361,7 @@ async fn perform_obfuscation(
         // Fallback to original clean runtime if no instructions were collected
         clean_runtime
     } else {
-        bytecloak_core::encoder::encode(&all_instructions)
+        azoth_core::encoder::encode(&all_instructions)
             .map_err(|e| format!("Failed to encode obfuscated instructions: {e}"))?
     };
 
@@ -397,7 +396,7 @@ mod tests {
 
         let body = response.json::<serde_json::Value>();
         assert_eq!(body["status"], "healthy");
-        assert_eq!(body["service"], "bytecloak-api");
+        assert_eq!(body["service"], "azoth-api");
     }
 
     #[tokio::test]

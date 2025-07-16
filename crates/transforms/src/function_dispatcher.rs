@@ -1,16 +1,16 @@
 use crate::util::{PassConfig, Transform};
 use async_trait::async_trait;
-use bytecloak_core::cfg_ir::{Block, CfgIrBundle};
-use bytecloak_core::decoder::Instruction;
-use bytecloak_core::detection::{detect_function_dispatcher, FunctionSelector};
-use bytecloak_core::Opcode;
-use bytecloak_utils::errors::TransformError;
+use azoth_core::cfg_ir::{Block, CfgIrBundle};
+use azoth_core::decoder::Instruction;
+use azoth_core::detection::{detect_function_dispatcher, FunctionSelector};
+use azoth_core::Opcode;
+use azoth_utils::errors::TransformError;
 use rand::{rngs::StdRng, Rng};
 use std::collections::{HashMap, HashSet};
 use tracing::debug;
 
 /// Function Dispatcher obfuscates the standard Solidity function dispatcher pattern
-/// to prevent fingerprinting and detection of bytecloak-generated contracts.
+/// to prevent fingerprinting and detection of azoth-generated contracts.
 ///
 /// **IMPORTANT:** This transform must run **before** any jump-address transforms
 /// to ensure PC integrity is maintained across the transformation pipeline.
@@ -404,7 +404,7 @@ impl Transform for FunctionDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytecloak_core::{cfg_ir, decoder, detection, strip};
+    use azoth_core::{cfg_ir, decoder, detection, strip};
     use rand::SeedableRng;
     use tokio;
 
