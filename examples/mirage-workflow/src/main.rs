@@ -1,14 +1,14 @@
 //! Mirage Privacy Protocol - Obfuscation Workflow
 
-use azoth_core::{cfg_ir, decoder, detection, encoder, strip};
-use azoth_transform::{pass, util::PassConfig};
+use azoth_transform::obfuscator::{obfuscate_bytecode, ObfuscationConfig, ObfuscationResult};
+use azoth_transform::PassConfig;
 use serde_json::json;
 use std::fs;
 
 const MIRAGE_ESCROW_PATH: &str = "foundry-contracts/out/MirageEscrow.sol/MirageEscrow.json";
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Mirage Privacy Protocol - Obfuscation Workflow");
     println!("=================================================");
 
@@ -24,7 +24,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // SENDER: Compile with obfuscation O(S, K2)
     println!("\nSENDER: Compiling contract with obfuscation...");
-    let obfuscated_bytecode = apply_mirage_obfuscation(&original_bytecode, seed_k2).await?;
+    let obfuscation_result = apply_mirage_obfuscation(&original_bytecode, seed_k2).await?;
+    let obfuscated_bytecode = hex::decode(
+        obfuscation_result
+            .obfuscated_bytecode
+            .trim_start_matches("0x"),
+    )?;
 
     let size_increase =
         calculate_percentage_increase(original_bytecode.len(), obfuscated_bytecode.len());
@@ -35,9 +40,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         size_increase
     );
 
-    // EXECUTOR: Verify bytecode integrity
-    println!("\nEXECUTOR: Verifying deterministic compilation with K2...");
-    let recompiled_bytecode = apply_mirage_obfuscation(&original_bytecode, seed_k2).await?;
+    // Print transform information
+    println!(
+        "   Transforms applied: {:?}",
+        obfuscation_result.metadata.transforms_applied
+    );
+    if obfuscation_result.unknown_opcodes_count > 0 {
+        println!(
+            "   Unknown opcodes preserved: {}",
+            obfuscation_result.unknown_opcodes_count
+        );
+    }
+
+    // VERIFIER: Verify bytecode integrity
+    println!("\nVERIFIER: Verifying deterministic compilation with K2...");
+    let recompilation_result = apply_mirage_obfuscation(&original_bytecode, seed_k2).await?;
+    let recompiled_bytecode = hex::decode(
+        recompilation_result
+            .obfuscated_bytecode
+            .trim_start_matches("0x"),
+    )?;
 
     // Check 1: Deterministic compilation (same seed = same result)
     let deterministic_verified = obfuscated_bytecode == recompiled_bytecode;
@@ -53,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("   ✅ Obfuscation transformation VERIFIED");
 
-    // Check 3: Functional equivalence (same behavior)
+    // Check 3: Functional equivalence
     let functional_equivalence =
         verify_functional_equivalence(&original_bytecode, &obfuscated_bytecode).await?;
     if !functional_equivalence {
@@ -83,6 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &obfuscated_bytecode,
         seed_k2,
         &gas_analysis,
+        &obfuscation_result,
         deterministic_verified,
         obfuscation_applied,
         functional_equivalence,
@@ -102,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Load MirageEscrow contract bytecode from Foundry artifacts
-fn load_mirage_contract() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn load_mirage_contract() -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let content = fs::read_to_string(MIRAGE_ESCROW_PATH)
         .map_err(|_| format!("Failed to load contract from {MIRAGE_ESCROW_PATH}\nRun './complete-setup.sh' first to compile contracts"))?;
 
@@ -121,38 +144,25 @@ fn load_mirage_contract() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     Ok(hex::decode(clean_bytecode)?)
 }
 
-/// Apply Mirage obfuscation transforms with user-provided seed
+/// Apply Mirage obfuscation transforms using the unified pipeline
 async fn apply_mirage_obfuscation(
     bytecode: &[u8],
     seed_k2: u64,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+) -> Result<ObfuscationResult, Box<dyn std::error::Error + Send + Sync>> {
     let hex_input = format!("0x{}", hex::encode(bytecode));
 
-    // Decode and analyze bytecode
-    let (instructions, info, _) = decoder::decode_bytecode(&hex_input, false).await?;
-    let sections = detection::locate_sections(bytecode, &instructions, &info)?;
-    let (_clean_runtime, clean_report) = strip::strip_bytecode(bytecode, &sections)?;
-    let mut cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, bytecode, clean_report)?;
+    // Create Mirage-specific transform configuration
+    let config = create_mirage_config(seed_k2);
 
-    // Configure transforms for Mirage protocol
-    let transforms = create_mirage_transforms();
-    let config = create_mirage_config();
-
-    // Apply transforms with user-provided seed K2
-    pass::run(&mut cfg_ir, &transforms, &config, seed_k2).await?;
-
-    // Encode back to bytecode
-    let instructions = extract_instructions_from_cfg(&cfg_ir);
-    let obfuscated_runtime = encoder::encode_with_original(&instructions, Some(bytecode))?;
-    let final_bytecode = encoder::rebuild(&obfuscated_runtime, &cfg_ir.clean_report);
-
-    Ok(final_bytecode)
+    // Use the unified obfuscation pipeline
+    obfuscate_bytecode(&hex_input, config).await
 }
 
-/// Create Mirage-specific transform pipeline
-fn create_mirage_transforms() -> Vec<Box<dyn azoth_transform::util::Transform>> {
-    vec![
-        Box::new(azoth_transform::shuffle::Shuffle),
+/// Create Mirage-specific obfuscation configuration
+fn create_mirage_config(seed_k2: u64) -> ObfuscationConfig {
+    // Build Mirage-specific transforms (function_dispatcher is added automatically)
+    let transforms = vec![
+        Box::new(azoth_transform::shuffle::Shuffle) as Box<dyn azoth_transform::Transform>,
         Box::new(
             azoth_transform::jump_address_transformer::JumpAddressTransformer::new(PassConfig {
                 max_size_delta: 0.2,
@@ -165,34 +175,19 @@ fn create_mirage_transforms() -> Vec<Box<dyn azoth_transform::util::Transform>> 
                 ..Default::default()
             },
         )),
-    ]
-}
+    ];
 
-/// Create Mirage-specific configuration
-fn create_mirage_config() -> PassConfig {
-    PassConfig {
-        accept_threshold: 0.0,
-        aggressive: false,
-        max_size_delta: 0.15,  // 15% size increase limit
-        max_opaque_ratio: 0.3, // Apply to 30% of blocks
+    ObfuscationConfig {
+        seed: seed_k2,
+        transforms,
+        pass_config: PassConfig {
+            accept_threshold: 0.0,
+            aggressive: true,
+            max_size_delta: 0.15,  // 15% size increase limit
+            max_opaque_ratio: 0.3, // Apply to 30% of blocks
+        },
+        preserve_unknown_opcodes: true,
     }
-}
-
-/// Extract instructions from CFG in order
-fn extract_instructions_from_cfg(
-    cfg_ir: &azoth_core::cfg_ir::CfgIrBundle,
-) -> Vec<azoth_core::decoder::Instruction> {
-    let mut instructions = Vec::new();
-    for node in cfg_ir.cfg.node_indices() {
-        if let azoth_core::cfg_ir::Block::Body {
-            instructions: block_ins,
-            ..
-        } = &cfg_ir.cfg[node]
-        {
-            instructions.extend(block_ins.iter().cloned());
-        }
-    }
-    instructions
 }
 
 /// Verify that obfuscation was actually applied (original ≠ obfuscated)
@@ -204,7 +199,7 @@ fn verify_obfuscation_applied(original: &[u8], obfuscated: &[u8]) -> bool {
 async fn verify_functional_equivalence(
     _original: &[u8],
     _obfuscated: &[u8],
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     println!("   Functional equivalence testing not yet implemented");
     println!("   Using placeholder verification for development");
 
@@ -263,18 +258,18 @@ fn calculate_gas_percentage_increase(original: u64, new: u64) -> f64 {
 async fn verify_deterministic_compilation_test(
     bytecode: &[u8],
     seed: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let result1 = apply_mirage_obfuscation(bytecode, seed).await?;
     let result2 = apply_mirage_obfuscation(bytecode, seed).await?;
 
-    if result1 != result2 {
+    if result1.obfuscated_bytecode != result2.obfuscated_bytecode {
         return Err("Same seed produced different bytecode - not deterministic!".into());
     }
     println!("   Same seed produces identical bytecode");
 
     // Test different seeds produce different results
     let diff_result = apply_mirage_obfuscation(bytecode, seed + 1).await?;
-    if result1 == diff_result {
+    if result1.obfuscated_bytecode == diff_result.obfuscated_bytecode {
         return Err("Different seeds produced identical bytecode!".into());
     }
     println!("   Different seeds produce different bytecode");
@@ -283,11 +278,13 @@ async fn verify_deterministic_compilation_test(
 }
 
 /// Generate comprehensive workflow report
+#[allow(clippy::too_many_arguments)]
 fn generate_workflow_report(
     original: &[u8],
     obfuscated: &[u8],
     seed: u64,
     gas_analysis: &GasAnalysis,
+    obfuscation_result: &ObfuscationResult,
     deterministic_verified: bool,
     obfuscation_applied: bool,
     functional_equivalence: bool,
@@ -301,7 +298,10 @@ fn generate_workflow_report(
                 "obfuscated_bytes": obfuscated.len(),
                 "size_increase_bytes": obfuscated.len() - original.len(),
                 "size_increase_percentage": calculate_percentage_increase(original.len(), obfuscated.len()),
-                "obfuscation_applied": obfuscation_applied
+                "obfuscation_applied": obfuscation_applied,
+                "unknown_opcodes_preserved": obfuscation_result.unknown_opcodes_count,
+                "blocks_created": obfuscation_result.blocks_created,
+                "instructions_added": obfuscation_result.instructions_added
             },
             "gas_analysis": {
                 "original_deployment_gas": gas_analysis.original_gas,
@@ -319,7 +319,7 @@ fn generate_workflow_report(
             },
             "security_properties": {
                 "statistical_indistinguishability": obfuscation_applied,
-                "transforms_applied": ["shuffle", "jump_address_transformer", "opaque_predicate"],
+                "transforms_applied": obfuscation_result.metadata.transforms_applied,
                 "verification_completeness": "basic_structural_validation"
             },
             "mirage_protocol": {
@@ -328,11 +328,18 @@ fn generate_workflow_report(
                 "anonymity_set": if obfuscation_applied { "Blends with unverified contract deployments" } else { "WARNING: Unchanged bytecode may be recognizable" },
                 "production_readiness": "requires_formal_verification"
             },
+            "obfuscation_details": {
+                "seed_used": obfuscation_result.metadata.seed_used,
+                "size_limit_exceeded": obfuscation_result.metadata.size_limit_exceeded,
+                "unknown_opcodes_preserved": obfuscation_result.metadata.unknown_opcodes_preserved,
+                "total_instructions_processed": obfuscation_result.total_instructions
+            },
             "recommendations": {
                 "immediate": [
                     "Current verification provides basic confidence for development",
                     "Functional testing validates structural integrity",
-                    "Deterministic compilation ensures Mirage protocol compatibility"
+                    "Deterministic compilation ensures Mirage protocol compatibility",
+                    "Function dispatcher obfuscation automatically applied for baseline security"
                 ],
                 "before_production": [
                     "Implement formal verification (see GitHub issue)",
@@ -355,7 +362,7 @@ fn generate_workflow_report(
 fn save_report(
     report: &serde_json::Value,
     filename: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     fs::write(filename, serde_json::to_string_pretty(report)?)?;
     Ok(())
 }

@@ -7,14 +7,13 @@ echo "=============================================="
 echo ""
 
 # Check if we're in the right location
-if [[ ! -f "../../core/Cargo.toml" ]]; then
-    echo "❌ Please run this script from: crates/examples/mirage-workflow/"
+if [[ ! -f "../../Cargo.toml" ]]; then
+    echo "❌ Please run this script from: examples/mirage-workflow/"
     echo "   Current directory: $(pwd)"
     exit 1
 fi
 
 echo "📁 Creating directory structure..."
-# Remove the unnecessary output directory creation
 mkdir -p src contracts
 
 echo "🔨 Setting up Foundry project..."
