@@ -1214,6 +1214,7 @@ dependencies = [
  "petgraph 0.8.2",
  "rand 0.9.1",
  "serde",
+ "serde_json",
  "sha3",
  "thiserror 2.0.12",
  "tokio",
@@ -1225,7 +1226,6 @@ dependencies = [
 name = "azoth-utils"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "hex",
  "serde_json",
  "thiserror 2.0.12",

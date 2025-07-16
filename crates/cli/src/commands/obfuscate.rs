@@ -1,25 +1,15 @@
 /// Module for the `obfuscate` subcommand, which applies obfuscation transforms to EVM
 /// bytecode.
 ///
-/// This module processes input bytecode, constructs a CFG, applies specified transforms (e.g.,
-/// shuffle, jump_transform, opaque-predicates), and outputs the obfuscated bytecode. It also
-/// generates a gas and size report if requested.
+/// This module processes input bytecode and uses the unified obfuscation pipeline
+/// from azoth-transform to apply transforms and output obfuscated bytecode.
 use async_trait::async_trait;
-use azoth_core::{
-    cfg_ir::Block,
-    decoder::{decode_bytecode, Instruction},
-    detection::locate_sections,
-    encoder::{encode_with_original, rebuild},
-    strip::strip_bytecode,
+use azoth_transform::obfuscator::{
+    create_gas_report, obfuscate_bytecode, print_obfuscation_analysis, ObfuscationConfig,
 };
-use azoth_transform::{
-    pass,
-    util::{PassConfig, Transform},
-};
+use azoth_transform::{PassConfig, Transform};
 use azoth_utils::errors::ObfuscateError;
 use clap::Args;
-use serde_json::json;
-use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
 use std::path::Path;
@@ -32,7 +22,8 @@ pub struct ObfuscateArgs {
     /// Random seed for transform application (default: 42).
     #[arg(long, default_value_t = 42)]
     seed: u64,
-    /// Comma-separated list of transforms (default: shuffle,jump_transform,opaque_pred).
+    /// Comma-separated list of OPTIONAL transforms (default: shuffle,jump_transform,opaque_pred).
+    /// Note: function_dispatcher is ALWAYS applied and doesn't need to be specified.
     #[arg(long, default_value = "shuffle,jump_transform,opaque_pred")]
     passes: String,
     /// Minimum quality threshold for accepting transforms (default: 0.0).
@@ -46,155 +37,76 @@ pub struct ObfuscateArgs {
     emit: Option<String>,
 }
 
-/// Analyzes instructions to count unknown opcodes and provide feedback.
-fn analyze_instructions(instructions: &[Instruction]) -> (usize, usize, Vec<String>) {
-    let total_count = instructions.len();
-    let mut unknown_count = 0;
-    let mut unknown_types = HashSet::new();
-
-    for instr in instructions {
-        if instr.opcode == "unknown" || instr.opcode.starts_with("UNKNOWN_") {
-            unknown_count += 1;
-            unknown_types.insert(instr.opcode.clone());
-        }
-    }
-
-    (
-        total_count,
-        unknown_count,
-        unknown_types.into_iter().collect(),
-    )
-}
-
-/// Executes the `obfuscate` subcommand to apply transforms and output obfuscated bytecode.
+/// Executes the `obfuscate` subcommand using the unified obfuscation pipeline.
 #[async_trait]
 impl super::Command for ObfuscateArgs {
     async fn execute(self) -> Result<(), Box<dyn Error>> {
-        let (bytes, decode_input, is_file) = {
-            if self.input.trim_start().starts_with("0x") {
-                let clean = normalise_hex(&self.input)?;
-                let raw = hex::decode(&clean)?;
-                (raw, self.input.to_string(), false)
-            } else if Path::new(&self.input).extension().and_then(|s| s.to_str()) == Some("hex") {
-                let s = fs::read_to_string(&self.input)?;
-                let clean = normalise_hex(&s)?;
-                let raw = hex::decode(&clean)?;
-                (raw, clean.clone(), false)
-            } else {
-                let raw = fs::read(&self.input)?;
-                (raw, self.input.to_string(), true)
-            }
+        // Step 1: Read and normalize input
+        let input_bytecode = read_input(&self.input)?;
+
+        // Step 2: Build transforms from CLI args
+        let transforms = build_passes(&self.passes)?;
+
+        // Step 3: Configure obfuscation
+        let config = ObfuscationConfig {
+            seed: self.seed,
+            transforms,
+            pass_config: PassConfig {
+                accept_threshold: self.accept_threshold,
+                aggressive: true,
+                max_size_delta: self.max_size_delta,
+                max_opaque_ratio: 0.5,
+            },
+            preserve_unknown_opcodes: true,
         };
 
-        let (instructions, info, _) = decode_bytecode(&decode_input, is_file).await?;
-
-        // Analyze and report unknown opcodes
-        let (total_instructions, unknown_count, unknown_types) =
-            analyze_instructions(&instructions);
-        if unknown_count > 0 {
-            println!("Input Analysis:");
-            println!("Total instructions: {total_instructions}");
-            println!(
-                "Unknown opcodes: {} ({:.1}%)",
-                unknown_count,
-                100.0 * unknown_count as f64 / total_instructions as f64
-            );
-            println!("Unknown types found: {unknown_types:?}");
-            println!("   → These will be preserved as raw bytes in the output.");
-            println!("   → If the original contract works, the obfuscated version should too.");
-            println!();
-        }
-
-        let sections = locate_sections(&bytes, &instructions, &info)?;
-        let (clean_runtime, clean_report) = strip_bytecode(&bytes, &sections)?;
-        let original_len = clean_runtime.len();
-        let mut cfg_ir = azoth_core::cfg_ir::build_cfg_ir(
-            &instructions,
-            &sections,
-            &bytes,
-            clean_report.clone(),
-        )?;
-
-        let passes = build_passes(&self.passes)?;
-        let cfg = PassConfig {
-            accept_threshold: self.accept_threshold,
-            aggressive: false,
-            max_size_delta: self.max_size_delta,
-            max_opaque_ratio: 0.5,
+        // Step 4: Run obfuscation pipeline
+        let result = match obfuscate_bytecode(&input_bytecode, config).await {
+            Ok(result) => result,
+            Err(e) => return Err(format!("{e}").into()),
         };
 
-        // Track size before transforms
-        let initial_size = {
-            let mut initial_instructions = Vec::new();
-            for node in cfg_ir.cfg.node_indices() {
-                if let Block::Body {
-                    instructions: block_ins,
-                    ..
-                } = &cfg_ir.cfg[node]
-                {
-                    initial_instructions.extend(block_ins.iter().cloned());
-                }
-            }
-            let initial_bytes = encode_with_original(&initial_instructions, Some(&bytes))?;
-            initial_bytes.len()
-        };
+        // Step 5: Print analysis and results
+        print_obfuscation_analysis(&result);
 
-        println!("Transform Analysis:");
-        println!("Original size: {} bytes", original_len);
-        println!("Pre-transform size: {} bytes", initial_size);
-        println!("Applying {} transforms...", passes.len());
-
-        // Apply all transforms at once (original behavior)
-        pass::run(&mut cfg_ir, &passes, &cfg, self.seed).await?;
-
-        let mut instructions = Vec::new();
-        for node in cfg_ir.cfg.node_indices() {
-            if let Block::Body {
-                instructions: block_ins,
-                ..
-            } = &cfg_ir.cfg[node]
-            {
-                instructions.extend(block_ins.iter().cloned());
-            }
-        }
-
-        // Encode with unknown opcode handling - pass original bytecode for PC lookup
-        let obf_runtime = encode_with_original(&instructions, Some(&bytes))?;
-        let final_bytecode = rebuild(&obf_runtime, &clean_report);
-        let new_len = obf_runtime.len();
-
-        let allowable = (original_len as f32 * (1.0 + self.max_size_delta)).ceil() as usize;
-        if new_len > allowable {
+        // Step 6: Check size limits
+        if result.metadata.size_limit_exceeded {
             return Err(format!(
                 "Obfuscated bytecode grew {:.1}%, exceeds --max-size-delta {:.1}%",
-                100.0 * (new_len as f32 / original_len as f32 - 1.0),
+                result.size_increase_percentage,
                 self.max_size_delta * 100.0
             )
             .into());
         }
 
+        // Step 7: Write report if requested
         if let Some(path) = self.emit {
-            let report = gas_report(original_len, new_len, unknown_count);
+            let report = create_gas_report(&result);
             fs::write(&path, serde_json::to_string_pretty(&report)?)?;
             println!("📊 Wrote gas/size report to {}", &path);
         }
 
-        // Success summary
-        if unknown_count > 0 {
-            println!("✅ Obfuscation complete with {unknown_count} unknown opcodes preserved",);
-        } else {
-            println!("✅ Obfuscation complete");
-        }
-        println!(
-            "📈 Size change: {} → {} bytes ({:+.1}%)",
-            original_len,
-            new_len,
-            100.0 * (new_len as f32 / original_len as f32 - 1.0)
-        );
-        println!();
+        // Step 8: Output final bytecode
+        println!("{}", result.obfuscated_bytecode);
 
-        println!("0x{}", hex::encode(final_bytecode));
         Ok(())
+    }
+}
+
+/// Reads input from hex string, .hex file, or binary file
+fn read_input(input: &str) -> Result<String, Box<dyn Error>> {
+    if input.trim_start().starts_with("0x") {
+        // Direct hex string input
+        Ok(input.to_string())
+    } else if Path::new(input).extension().and_then(|s| s.to_str()) == Some("hex") {
+        // .hex file
+        let content = fs::read_to_string(input)?;
+        let normalized = normalise_hex(&content)?;
+        Ok(format!("0x{normalized}"))
+    } else {
+        // Binary file
+        let bytes = fs::read(input)?;
+        Ok(format!("0x{}", hex::encode(bytes)))
     }
 }
 
@@ -229,34 +141,6 @@ fn build_passes(list: &str) -> Result<Vec<Box<dyn Transform>>, Box<dyn Error>> {
         .collect()
 }
 
-/// Generates a JSON report comparing original and obfuscated bytecode sizes and gas costs.
-///
-/// # Arguments
-/// * `original_len` - The length of the original runtime bytecode.
-/// * `new_len` - The length of the obfuscated runtime bytecode.
-/// * `unknown_count` - Number of unknown opcodes preserved.
-///
-/// # Returns
-/// A `serde_json::Value` containing the report.
-fn gas_report(original_len: usize, new_len: usize, unknown_count: usize) -> serde_json::Value {
-    let gas = |bytes| 32_000 + 200 * bytes as u64;
-    json!({
-        "original_bytes": original_len,
-        "obfuscated_bytes": new_len,
-        "size_delta_bytes": (new_len as i64 - original_len as i64),
-        "original_deploy_gas": gas(original_len),
-        "obfuscated_deploy_gas": gas(new_len),
-        "gas_delta": (gas(new_len) as i64 - gas(original_len) as i64),
-        "percent_size": (new_len as f64 / original_len as f64 - 1.0) * 100.0,
-        "unknown_opcodes_preserved": unknown_count,
-        "notes": if unknown_count > 0 {
-            "Unknown opcodes were preserved as raw bytes to maintain functionality"
-        } else {
-            "All opcodes were standard and successfully obfuscated"
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,7 +151,7 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_obfuscate_pipeline() {
-        let input = "0x6001600155aabb"; // PUSH1 0x01, PUSH1 0x02, MSTORE, dummy auxdata
+        let input = "0x6001600155aabb"; // PUSH1 0x01, PUSH1 0x01, SSTORE, dummy auxdata
         let dir = env::temp_dir();
         let path = dir.join("test_obfuscate.hex");
         fs::write(&path, input).unwrap();
@@ -290,42 +174,33 @@ mod tests {
         let report = fs::read_to_string(&temp_report).unwrap();
         let report_json: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert!(report_json["original_bytes"].is_number());
-        assert!(report_json["percent_size"].is_f64());
+        assert!(report_json["percent_size"].is_number());
         assert!(report_json["unknown_opcodes_preserved"].is_number());
+        assert!(report_json["transforms_applied"].is_array());
 
         fs::remove_file(&path).unwrap();
         fs::remove_file(&temp_report).unwrap();
     }
 
     #[test]
-    fn test_analyze_instructions() {
-        let instructions = vec![
-            Instruction {
-                pc: 0,
-                opcode: "PUSH1".to_string(),
-                imm: Some("01".to_string()),
-            },
-            Instruction {
-                pc: 2,
-                opcode: "unknown".to_string(),
-                imm: None,
-            },
-            Instruction {
-                pc: 3,
-                opcode: "UNKNOWN_0xfe".to_string(),
-                imm: None,
-            },
-            Instruction {
-                pc: 4,
-                opcode: "SSTORE".to_string(),
-                imm: None,
-            },
-        ];
+    fn test_normalise_hex() {
+        assert_eq!(normalise_hex("0x1234").unwrap(), "1234");
+        assert_eq!(normalise_hex("12_34").unwrap(), "1234");
+        assert_eq!(normalise_hex("  0x12_34  ").unwrap(), "1234");
+        assert!(normalise_hex("123").is_err()); // Odd length
+    }
 
-        let (total, unknown, types) = analyze_instructions(&instructions);
-        assert_eq!(total, 4);
-        assert_eq!(unknown, 2);
-        assert!(types.contains(&"unknown".to_string()));
-        assert!(types.contains(&"UNKNOWN_0xfe".to_string()));
+    #[test]
+    fn test_build_passes() {
+        let passes = build_passes("shuffle,opaque_pred").unwrap();
+        assert_eq!(passes.len(), 2);
+
+        let passes = build_passes("shuffle").unwrap();
+        assert_eq!(passes.len(), 1);
+
+        let passes = build_passes("").unwrap();
+        assert_eq!(passes.len(), 0);
+
+        assert!(build_passes("invalid_pass").is_err());
     }
 }

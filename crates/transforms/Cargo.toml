@@ -17,3 +17,4 @@ hex.workspace = true
 petgraph.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
+serde_json.workspace = true

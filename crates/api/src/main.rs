@@ -7,11 +7,8 @@ use axum::{
 };
 use azoth_core::{cfg_ir, decoder, detection, strip};
 use azoth_transform::{
-    jump_address_transformer::JumpAddressTransformer,
-    opaque_predicate::OpaquePredicate,
-    pass::run,
-    shuffle::Shuffle,
-    util::{PassConfig, Transform},
+    jump_address_transformer::JumpAddressTransformer, opaque_predicate::OpaquePredicate, pass::run,
+    shuffle::Shuffle, PassConfig, Transform,
 };
 use petgraph::visit::EdgeRef;
 use serde::{Deserialize, Serialize};
