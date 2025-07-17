@@ -55,6 +55,8 @@ pub enum ExtractionPattern {
     Newer,
     /// Fallback: CALLDATASIZE ISZERO (fallback-only contracts)
     Fallback,
+    /// Direct: PUSH1 0x00 CALLDATALOAD (no shift, direct comparison)
+    Direct,
 }
 
 /// Represents the type of a bytecode section.
@@ -95,25 +97,6 @@ impl Section {
 }
 
 /// Locates all non-overlapping, offset-ordered sections in the bytecode.
-///
-/// # Arguments
-/// * `bytes` - Raw bytecode bytes.
-/// * `instructions` - Decoded instructions from `decoder.rs`.
-/// * `info` - Metadata about the bytecode from `decoder.rs`.
-///
-/// # Returns
-/// A `Result` containing a vector of `Section` structs, ordered by offset, covering the entire
-/// bytecode. If no dispatcher pattern is found, returns a single `Runtime` section (minus Auxdata).
-/// Returns an error if sections overlap or leave gaps.
-///
-/// # Examples
-/// ```rust,ignore
-/// let bytes = hex::decode("60016002").unwrap();
-/// let instructions = vec![/* parsed instructions */];
-/// let info = DecodeInfo { byte_length: 2, keccak_hash: [0; 32], source: SourceType::HexString };
-/// let sections = locate_sections(&bytes, &instructions, &info).unwrap();
-/// assert_eq!(sections.len(), 1); // Single Runtime section if no pattern
-/// ```
 pub fn locate_sections(
     bytes: &[u8],
     instructions: &[Instruction],
@@ -122,27 +105,73 @@ pub fn locate_sections(
     let mut sections = Vec::new();
     let total_len = bytes.len();
 
+    tracing::debug!(
+        "Processing bytecode: {} bytes, {} instructions",
+        total_len,
+        instructions.len()
+    );
+
     // Pass A: Detect Auxdata (CBOR) from the end
     let auxdata = detect_auxdata(bytes);
     let aux_offset = auxdata.map(|(offset, _)| offset).unwrap_or(total_len);
     tracing::debug!("Auxdata offset: {}", aux_offset);
 
+    // Special case: If auxdata starts at offset 0, the entire bytecode is auxdata
+    if aux_offset == 0 {
+        if let Some((offset, len)) = auxdata {
+            tracing::debug!("Entire bytecode is auxdata: offset={}, len={}", offset, len);
+            sections.push(Section {
+                kind: SectionKind::Auxdata,
+                offset,
+                len,
+            });
+            return Ok(sections);
+        }
+    }
+
     // Pass B: Detect Padding before Auxdata
     let padding = detect_padding(instructions, aux_offset);
-    let _has_padding = padding.is_some();
 
     // Pass C: Detect Init -> Runtime split using dispatcher pattern
-    let (init_end, runtime_start, runtime_len) =
+    let (mut init_end, mut runtime_start, mut runtime_len) =
         detect_init_runtime_split(instructions).unwrap_or((0, 0, aux_offset));
+
     tracing::debug!(
-        "Init end: {}, Runtime start: {}, Runtime len: {}",
+        "Initial detection: init_end={}, runtime_start={}, runtime_len={}",
         init_end,
         runtime_start,
         runtime_len
     );
 
+    // Handles cases where deployment pattern detection fails
+    // but we clearly have deployment bytecode (substantial size suggests it)
+    if init_end == 0 && runtime_start == 0 && aux_offset > 100 {
+        // Try fallback detection methods
+        if let Some((detected_init_end, detected_runtime_start)) =
+            detect_deployment_fallback(instructions, aux_offset)
+        {
+            init_end = detected_init_end;
+            runtime_start = detected_runtime_start;
+            runtime_len = aux_offset.saturating_sub(runtime_start);
+            tracing::debug!(
+                "Fallback detection succeeded: init_end={}, runtime_start={}, runtime_len={}",
+                init_end,
+                runtime_start,
+                runtime_len
+            );
+        }
+    }
+
+    // Additional guard: if we found runtime_start but not init_end
+    if init_end == 0 && runtime_start > 0 {
+        init_end = runtime_start;
+        tracing::debug!(
+            "Fixed init_end from 0 to {} based on runtime_start",
+            init_end
+        );
+    }
+
     // Clamp runtime_len to avoid exceeding aux_offset
-    let mut runtime_len = runtime_len;
     if runtime_start + runtime_len > aux_offset {
         runtime_len = aux_offset.saturating_sub(runtime_start);
         tracing::debug!("Clamped runtime_len to {}", runtime_len);
@@ -176,28 +205,28 @@ pub fn locate_sections(
         }
     }
 
-    // Pass E: Fallback to Runtime if no dispatcher pattern
-    if init_end == 0 && runtime_start == 0 && aux_offset != 0 {
-        // Fix: Skip Runtime if aux_offset=0
-        let runtime_len = aux_offset;
-        tracing::debug!("No dispatcher, full Runtime: len={}", runtime_len);
+    // Pass E: Create sections based on detected boundaries
+    if init_end == 0 && runtime_start == 0 {
+        // True runtime-only contract
+        tracing::debug!("Runtime-only bytecode detected");
         sections.push(Section {
             kind: SectionKind::Runtime,
             offset: 0,
-            len: runtime_len,
+            len: aux_offset,
         });
     } else {
+        // Deployment bytecode (original or obfuscated)
         if init_end > 0 {
-            tracing::debug!("Init section: offset=0, len={}", init_end);
+            tracing::debug!("Creating Init section: offset=0, len={}", init_end);
             sections.push(Section {
                 kind: SectionKind::Init,
                 offset: 0,
                 len: init_end,
             });
         }
-        if runtime_len > 0 {
+        if runtime_len > 0 && runtime_start < aux_offset {
             tracing::debug!(
-                "Runtime section: offset={}, len={}",
+                "Creating Runtime section: offset={}, len={}",
                 runtime_start,
                 runtime_len
             );
@@ -211,7 +240,7 @@ pub fn locate_sections(
 
     // Add Auxdata section if detected
     if let Some((offset, len)) = auxdata {
-        tracing::debug!("Auxdata section: offset={}, len={}", offset, len);
+        tracing::debug!("Adding auxdata section: offset={}, len={}", offset, len);
         sections.push(Section {
             kind: SectionKind::Auxdata,
             offset,
@@ -227,46 +256,141 @@ pub fn locate_sections(
                 && sec.offset >= rt.offset
                 && sec.offset < rt.offset + rt.len
             {
-                // Shrink runtime so it ends where padding begins
-                rt.len = sec.offset - rt.offset;
+                let new_len = sec.offset - rt.offset;
+                tracing::debug!(
+                    "Adjusting runtime section length from {} to {} due to padding",
+                    rt.len,
+                    new_len
+                );
+                rt.len = new_len;
             }
         }
     }
 
     // Ensure sections are non-overlapping and cover the entire range
     sections.sort_by_key(|s| s.offset);
-    tracing::debug!("Sorted sections: {:?}", sections);
+    tracing::debug!("Final sections before validation: {:?}", sections);
 
+    validate_sections(&sections, total_len)?;
+
+    tracing::debug!("Sections validation passed: {:?}", sections);
+    Ok(sections)
+}
+
+/// Fallback deployment detection for when the strict pattern fails
+fn detect_deployment_fallback(
+    instructions: &[Instruction],
+    aux_offset: usize,
+) -> Option<(usize, usize)> {
+    // Method 1: Look for CODECOPY + RETURN pattern
+    if let Some((init_end, runtime_start)) = detect_codecopy_return_simple(instructions) {
+        if runtime_start < aux_offset {
+            return Some((init_end, runtime_start));
+        }
+    }
+
+    // Method 2: Look for function dispatcher pattern (indicates runtime start)
+    if let Some(dispatcher_info) = detect_function_dispatcher(instructions) {
+        // If we found a dispatcher, assume everything before it is Init
+        let runtime_start = dispatcher_info.start_offset;
+        if runtime_start > 0 && runtime_start < aux_offset {
+            tracing::debug!(
+                "Using function dispatcher at offset {} as runtime start",
+                runtime_start
+            );
+            return Some((runtime_start, runtime_start));
+        }
+    }
+
+    // Method 3: Heuristic based on instruction patterns
+    // Look for the transition from deployment-style to runtime-style code
+    for instruction in instructions.iter() {
+        // Common runtime start patterns
+        if instruction.opcode == "CALLDATASIZE"
+            || (instruction.opcode == "PUSH1" && instruction.imm.as_deref() == Some("00"))
+        {
+            // This might be the start of runtime code
+            let potential_runtime_start = instruction.pc;
+            if potential_runtime_start > 100 && potential_runtime_start < aux_offset {
+                tracing::debug!(
+                    "Heuristic runtime start detected at PC {}",
+                    potential_runtime_start
+                );
+                return Some((potential_runtime_start, potential_runtime_start));
+            }
+        }
+    }
+
+    None
+}
+
+/// Simple CODECOPY + RETURN detection
+fn detect_codecopy_return_simple(instructions: &[Instruction]) -> Option<(usize, usize)> {
+    // Find first CODECOPY
+    let codecopy_idx = instructions.iter().position(|i| i.opcode == "CODECOPY")?;
+
+    // Find RETURN after CODECOPY (within reasonable distance)
+    let return_idx = instructions[codecopy_idx..]
+        .iter()
+        .take(20)
+        .position(|i| i.opcode == "RETURN")
+        .map(|pos| codecopy_idx + pos)?;
+
+    let init_end = instructions[return_idx].pc + 1;
+
+    // Try to find runtime start from PUSH instructions before CODECOPY
+    let mut runtime_start = init_end; // fallback
+
+    for i in (0..codecopy_idx).rev().take(10) {
+        if instructions[i].opcode.starts_with("PUSH") {
+            if let Some(imm) = &instructions[i].imm {
+                if let Ok(value) = usize::from_str_radix(imm, 16) {
+                    if value > init_end && value < 100000 {
+                        runtime_start = value;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::debug!(
+        "CODECOPY+RETURN detection: init_end={}, runtime_start={}",
+        init_end,
+        runtime_start
+    );
+    Some((init_end, runtime_start))
+}
+
+/// Validates sections for overlaps, gaps, and bounds
+pub fn validate_sections(sections: &[Section], total_len: usize) -> Result<(), DetectError> {
     let mut current_offset = 0;
     for section in sections.iter() {
         tracing::debug!(
-            "Checking section: kind={:?}, offset={}, len={}",
+            "Validating section: kind={:?}, offset={}, len={}, end={}",
             section.kind,
             section.offset,
-            section.len
+            section.len,
+            section.end()
         );
+
         if section.offset < current_offset {
-            tracing::debug!("Overlap detected at offset {}", section.offset);
             return Err(DetectError::Overlap(section.offset));
         }
         if section.offset > current_offset {
-            tracing::debug!("Gap detected at offset {}", current_offset);
             return Err(DetectError::Gap(current_offset));
         }
-        current_offset = section.offset + section.len;
+        if section.end() > total_len {
+            return Err(DetectError::OutOfBounds(section.end()));
+        }
+        current_offset = section.end();
     }
 
     if current_offset != total_len {
-        tracing::debug!(
-            "Gap at end: current_offset={}, total_len={}",
-            current_offset,
-            total_len
-        );
         return Err(DetectError::Gap(current_offset));
     }
 
-    tracing::debug!("Sections validated: {:?}", sections);
-    Ok(sections)
+    Ok(())
 }
 
 /// Detects Auxdata (CBOR) section from the end of the bytecode.
@@ -349,6 +473,21 @@ fn detect_padding(instructions: &[Instruction], aux_offset: usize) -> Option<(us
 /// # Returns
 /// Optional tuple of (init_end, runtime_start, runtime_len) if pattern is found, None otherwise.
 fn detect_init_runtime_split(instructions: &[Instruction]) -> Option<(usize, usize, usize)> {
+    // Try the strict pattern first (for backwards compatibility)
+    if let Some(result) = detect_strict_deployment_pattern(instructions) {
+        return Some(result);
+    }
+
+    // Fallback: Look for any CODECOPY + RETURN pattern
+    if let Some(result) = detect_codecopy_return_pattern(instructions) {
+        return Some(result);
+    }
+
+    None
+}
+
+/// Detects the strict deployment pattern (original heuristic)
+fn detect_strict_deployment_pattern(instructions: &[Instruction]) -> Option<(usize, usize, usize)> {
     for i in 0..instructions.len().saturating_sub(6) {
         if instructions[i].opcode.starts_with("PUSH")
             && instructions[i + 1].opcode.starts_with("PUSH")
@@ -367,10 +506,84 @@ fn detect_init_runtime_split(instructions: &[Instruction]) -> Option<(usize, usi
                 .as_ref()
                 .and_then(|s| usize::from_str_radix(s, 16).ok())?;
             let init_end = instructions[i + 5].pc + 1;
+
+            tracing::debug!(
+                "Found strict deployment pattern at {}: init_end={}, runtime_start={}, runtime_len={}",
+                i,
+                init_end,
+                runtime_ofs,
+                runtime_len
+            );
+
             return Some((init_end, runtime_ofs, runtime_len));
         }
     }
     None
+}
+
+/// Fallback: Look for CODECOPY + RETURN pattern with more flexibility
+fn detect_codecopy_return_pattern(instructions: &[Instruction]) -> Option<(usize, usize, usize)> {
+    // Find CODECOPY instruction
+    let codecopy_idx = instructions
+        .iter()
+        .position(|instr| instr.opcode == "CODECOPY")?;
+
+    // Look for RETURN after CODECOPY (within reasonable distance)
+    let return_idx = instructions[codecopy_idx + 1..]
+        .iter()
+        .take(10) // Look within next 10 instructions
+        .position(|instr| instr.opcode == "RETURN")
+        .map(|pos| codecopy_idx + 1 + pos)?;
+
+    // Try to extract runtime parameters from PUSH instructions before CODECOPY
+    let mut runtime_len = None;
+    let mut runtime_start = None;
+
+    // Look backwards from CODECOPY for PUSH instructions
+    for i in (0..codecopy_idx).rev().take(10) {
+        if instructions[i].opcode.starts_with("PUSH") {
+            if let Some(imm) = &instructions[i].imm {
+                if let Ok(value) = usize::from_str_radix(imm, 16) {
+                    if runtime_len.is_none() && value > 0 && value < 100000 {
+                        // First reasonable value could be runtime length
+                        runtime_len = Some(value);
+                    } else if runtime_start.is_none() && value > 0 && value < 100000 {
+                        // Second reasonable value could be runtime start
+                        runtime_start = Some(value);
+                    }
+
+                    if runtime_len.is_some() && runtime_start.is_some() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // If we found CODECOPY + RETURN but can't extract parameters,
+    // make reasonable assumptions
+    let runtime_len = runtime_len.unwrap_or_else(|| {
+        // Estimate runtime length from instruction count after return
+        instructions.len().saturating_sub(return_idx + 1) * 2 // rough estimate
+    });
+
+    let runtime_start = runtime_start.unwrap_or_else(|| {
+        // Assume runtime starts right after the RETURN instruction
+        instructions[return_idx].pc + 1
+    });
+
+    let init_end = instructions[return_idx].pc + 1;
+
+    tracing::debug!(
+        "Found fallback deployment pattern: CODECOPY at {}, RETURN at {}, init_end={}, runtime_start={}, runtime_len={}",
+        codecopy_idx,
+        return_idx,
+        init_end,
+        runtime_start,
+        runtime_len
+    );
+
+    Some((init_end, runtime_start, runtime_len))
 }
 
 /// Detects ConstructorArgs section between Init end and Runtime start.
@@ -473,10 +686,11 @@ pub fn is_calldata_extraction_pattern(instrs: &[Instruction]) -> Option<Extracti
         return None;
     }
 
-    // Pattern 1: PUSH1 0x00 CALLDATALOAD PUSH1 0xE0 SHR
+    // Pattern 1: [PUSH1 0x00 | PUSH0] CALLDATALOAD PUSH1 0xE0 SHR
     if instrs.len() >= 4
-        && instrs[0].opcode == Opcode::PUSH(1).to_string()
-        && instrs[0].imm.as_deref() == Some("00")
+        && ((instrs[0].opcode == Opcode::PUSH(1).to_string()
+            && instrs[0].imm.as_deref() == Some("00"))
+            || instrs[0].opcode == Opcode::PUSH(0).to_string())
         && instrs[1].opcode == Opcode::CALLDATALOAD.to_string()
         && instrs[2].opcode == Opcode::PUSH(1).to_string()
         && instrs[2].imm.as_deref() == Some("e0")
@@ -485,10 +699,11 @@ pub fn is_calldata_extraction_pattern(instrs: &[Instruction]) -> Option<Extracti
         return Some(ExtractionPattern::Standard);
     }
 
-    // Pattern 2: PUSH1 0x00 CALLDATALOAD PUSH29 ... SHR
+    // Pattern 2: [PUSH1 0x00 | PUSH0] CALLDATALOAD PUSH29 ... SHR
     if instrs.len() >= 4
-        && instrs[0].opcode == Opcode::PUSH(1).to_string()
-        && instrs[0].imm.as_deref() == Some("00")
+        && ((instrs[0].opcode == Opcode::PUSH(1).to_string()
+            && instrs[0].imm.as_deref() == Some("00"))
+            || instrs[0].opcode == Opcode::PUSH(0).to_string())
         && instrs[1].opcode == Opcode::CALLDATALOAD.to_string()
         && instrs[2].opcode == Opcode::PUSH(29).to_string()
         && instrs[3].opcode == Opcode::SHR.to_string()
@@ -511,6 +726,17 @@ pub fn is_calldata_extraction_pattern(instrs: &[Instruction]) -> Option<Extracti
         && instrs[1].opcode == Opcode::ISZERO.to_string()
     {
         return Some(ExtractionPattern::Fallback);
+    }
+
+    // Pattern 5: Direct comparison without shift - PUSH1 0x00 CALLDATALOAD
+    if instrs.len() >= 2
+        && ((instrs[0].opcode == Opcode::PUSH(1).to_string()
+            && instrs[0].imm.as_deref() == Some("00"))
+            || instrs[0].opcode == Opcode::PUSH(0).to_string())
+        && instrs[1].opcode == Opcode::CALLDATALOAD.to_string()
+    {
+        tracing::debug!("Matched Direct extraction pattern (no shift)");
+        return Some(ExtractionPattern::Direct);
     }
 
     // Fallback: scan for CALLDATALOAD + SHR within first 6 instructions
@@ -588,12 +814,24 @@ fn get_extraction_pattern_length(
                 None
             }
         }
+        ExtractionPattern::Direct => {
+            if instrs.len() >= 2
+                && ((instrs[0].opcode == Opcode::PUSH(1).to_string()
+                    && instrs[0].imm.as_deref() == Some("00"))
+                    || instrs[0].opcode == Opcode::PUSH(0).to_string())
+                && instrs[1].opcode == Opcode::CALLDATALOAD.to_string()
+            {
+                Some(2)
+            } else {
+                None
+            }
+        }
     }
 }
 
 /// Parses a function selector comparison pattern.
 ///
-/// Identifies the standard pattern: DUP1 PUSH4 <selector> EQ PUSH2 <addr> JUMPI
+/// Identifies the standard pattern: DUP1 [optional PUSH0|PUSH1 0x00] PUSH4 <selector> EQ PUSH{1,2} <addr> JUMPI
 ///
 /// # Arguments
 /// * `instrs` - Instructions starting at potential selector check
@@ -601,23 +839,49 @@ fn get_extraction_pattern_length(
 /// # Returns
 /// `Some((selector, target_address))` if pattern matches, `None` otherwise
 fn parse_selector_check(instrs: &[Instruction]) -> Option<(u32, u64)> {
-    if instrs.len() < 6 {
+    if instrs.len() < 5 {
         return None;
     }
 
-    // Standard pattern: DUP1 PUSH4 <selector> EQ PUSH2 <addr> JUMPI
-    if instrs[0].opcode == Opcode::DUP(1).to_string()
-        && instrs[1].opcode == Opcode::PUSH(4).to_string()
-        && instrs[2].opcode == Opcode::EQ.to_string()
-        && instrs[3].opcode.starts_with("PUSH")
-        && instrs[4].opcode == Opcode::JUMPI.to_string()
-    {
-        let selector = u32::from_str_radix(instrs[1].imm.as_ref()?, 16).ok()?;
-        let address = u64::from_str_radix(instrs[3].imm.as_ref()?, 16).ok()?;
-        return Some((selector, address));
+    let mut i = 0;
+
+    // Must start with DUP1
+    if instrs.get(i)?.opcode != Opcode::DUP(1).to_string() {
+        return None;
+    }
+    i += 1;
+
+    // Must have PUSH4 with selector
+    if instrs.get(i)?.opcode != Opcode::PUSH(4).to_string() {
+        return None;
+    }
+    let selector = u32::from_str_radix(instrs[i].imm.as_ref()?, 16).ok()?;
+    i += 1;
+
+    // Must have EQ
+    if instrs.get(i)?.opcode != Opcode::EQ.to_string() {
+        return None;
+    }
+    i += 1;
+
+    // Must have PUSH1 or PUSH2 with address
+    if !instrs.get(i)?.opcode.starts_with("PUSH1") && !instrs.get(i)?.opcode.starts_with("PUSH2") {
+        return None;
+    }
+    let address = u64::from_str_radix(instrs[i].imm.as_ref()?, 16).ok()?;
+    i += 1;
+
+    // Must have JUMPI
+    if instrs.get(i)?.opcode != Opcode::JUMPI.to_string() {
+        return None;
     }
 
-    None
+    Some((selector, address))
+}
+
+/// Returns true iff a canonical dispatcher was found.
+pub fn has_dispatcher(instructions: &[Instruction]) -> bool {
+    detect_function_dispatcher(instructions).is_some()
 }
 
 // todo(g4titanx): turn the unit-test into a property test instead of checking hard-coded offsets.
@@ -674,7 +938,8 @@ mod tests {
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::DEBUG)
             .init();
-        let _bytes = vec![0; 10];
+        let bytes = vec![0; 10];
+        let total_len = bytes.len();
         let _instructions: Vec<Instruction> = vec![]; // Explicit type annotation
         let _info = DecodeInfo {
             byte_length: 10,
@@ -698,7 +963,7 @@ mod tests {
 
         // Directly test overlap validation
         simulated_sections.sort_by_key(|s| s.offset);
-        let result = validate_sections(&mut simulated_sections);
+        let result = validate_sections(&mut simulated_sections, total_len);
         tracing::debug!("Result from validate_sections: {:?}", result);
         assert!(
             matches!(result, Err(DetectError::Overlap(3))),
@@ -805,21 +1070,5 @@ mod tests {
             .unwrap();
         assert_eq!(rt.len, 5); // 5-byte program
         assert!(sections.iter().any(|s| s.kind == SectionKind::Padding));
-    }
-
-    /// Validates sections for overlaps and gaps.
-    fn validate_sections(sections: &mut [Section]) -> Result<(), DetectError> {
-        sections.sort_by_key(|s| s.offset);
-        let mut current_offset = 0;
-        for section in sections.iter() {
-            if section.offset < current_offset {
-                return Err(DetectError::Overlap(section.offset));
-            }
-            if section.offset > current_offset {
-                return Err(DetectError::Gap(current_offset));
-            }
-            current_offset = section.offset + section.len;
-        }
-        Ok(())
     }
 }

@@ -6,7 +6,7 @@ use azoth_core::detection::{detect_function_dispatcher, FunctionSelector};
 use azoth_core::Opcode;
 use azoth_utils::errors::TransformError;
 use rand::{rngs::StdRng, Rng};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use tracing::debug;
 
 /// Function Dispatcher obfuscates the standard Solidity function dispatcher pattern
@@ -322,93 +322,120 @@ impl Transform for FunctionDispatcher {
     }
 
     async fn apply(&self, ir: &mut CfgIrBundle, rng: &mut StdRng) -> Result<bool, TransformError> {
-        let mut changed = false;
+        // First, collect all instructions from all blocks in execution order
+        let mut all_instructions = Vec::new();
+        let mut block_boundaries = Vec::new();
 
-        // Process each block to find dispatcher patterns
-        for node_idx in ir.cfg.node_indices().collect::<Vec<_>>() {
+        for node_idx in ir.cfg.node_indices() {
             if let Block::Body {
                 instructions,
                 start_pc,
-                max_stack,
-            } = &mut ir.cfg[node_idx]
+                ..
+            } = &ir.cfg[node_idx]
             {
-                if let Some((start, end, selectors)) = self.detect_dispatcher(instructions) {
-                    debug!(
-                        "Found function dispatcher with {} selectors at block {} (PC: 0x{:x})",
-                        selectors.len(),
-                        node_idx.index(),
-                        start_pc
-                    );
+                block_boundaries.push((node_idx, all_instructions.len(), *start_pc));
+                all_instructions.extend(instructions.clone());
+            }
+        }
 
-                    // Calculate size changes for jump target updates
-                    let original_size = self.estimate_bytecode_size(&instructions[start..end]);
-                    let (new_instructions, needed_stack) =
-                        self.create_obfuscated_dispatcher(selectors, rng)?;
-                    let new_size = self.estimate_bytecode_size(&new_instructions);
-                    let size_delta = new_size as isize - original_size as isize;
+        // Now detect dispatcher across all instructions
+        if let Some((start, end, selectors)) = self.detect_dispatcher(&all_instructions) {
+            debug!(
+                "Found function dispatcher with {} selectors spanning instructions {} to {}",
+                selectors.len(),
+                start,
+                end
+            );
 
-                    // Create PC mapping for the dispatcher region
-                    let mut pc_mapping = HashMap::new();
-                    let region_start = *start_pc;
+            // Find which blocks contain the dispatcher
+            let mut affected_blocks = Vec::new();
+            for (node_idx, block_start, start_pc) in block_boundaries {
+                let block_instructions = if let Block::Body { instructions, .. } = &ir.cfg[node_idx]
+                {
+                    instructions.len()
+                } else {
+                    continue;
+                };
 
-                    // Map old dispatcher PCs to new ones (simplified mapping)
-                    for (i, old_instr) in instructions[start..end].iter().enumerate() {
-                        if i < new_instructions.len() {
-                            pc_mapping.insert(old_instr.pc, region_start + i * 2);
-                            // Rough estimate
+                let block_end = block_start + block_instructions;
+
+                // Check if this block overlaps with the dispatcher region
+                if block_start < end && block_end > start {
+                    affected_blocks.push((node_idx, block_start, start_pc));
+                }
+            }
+
+            if !affected_blocks.is_empty() {
+                let (first_block_idx, first_block_start, _) = affected_blocks[0];
+
+                if let Block::Body {
+                    instructions,
+                    start_pc,
+                    max_stack,
+                } = &mut ir.cfg[first_block_idx]
+                {
+                    // Calculate relative positions within this block
+                    let block_start_pos = start.saturating_sub(first_block_start);
+                    let block_end_pos =
+                        (end.saturating_sub(first_block_start)).min(instructions.len());
+
+                    if block_start_pos < instructions.len() && block_end_pos > block_start_pos {
+                        let original_size = self
+                            .estimate_bytecode_size(&instructions[block_start_pos..block_end_pos]);
+                        let (new_instructions, needed_stack) =
+                            self.create_obfuscated_dispatcher(selectors, rng)?;
+                        let new_size = self.estimate_bytecode_size(&new_instructions);
+                        let size_delta = new_size as isize - original_size as isize;
+
+                        // Replace the dispatcher section in this block
+                        instructions.drain(block_start_pos..block_end_pos);
+
+                        // Insert new instructions
+                        for (i, new_instr) in new_instructions.clone().into_iter().enumerate() {
+                            instructions.insert(block_start_pos + i, new_instr);
                         }
+
+                        // Update max_stack
+                        *max_stack = (*max_stack).max(needed_stack);
+
+                        debug!(
+                            "Replaced dispatcher in block {}: {} -> {} instructions, size delta: {:+} bytes",
+                            first_block_idx.index(),
+                            block_end_pos - block_start_pos,
+                            new_instructions.len(),
+                            size_delta
+                        );
+
+                        // Update CFG structure
+                        let region_start = *start_pc + (block_start_pos * 2); // Rough PC estimate
+                        ir.update_jump_targets(size_delta, region_start, None)
+                            .map_err(TransformError::CoreError)?;
+
+                        ir.reindex_pcs().map_err(TransformError::CoreError)?;
+
+                        ir.rebuild_edges_for_block(first_block_idx)
+                            .map_err(TransformError::CoreError)?;
+
+                        return Ok(true);
                     }
-
-                    // Replace the dispatcher section
-                    instructions.drain(start..end);
-
-                    // Insert new instructions
-                    for (i, new_instr) in new_instructions.into_iter().enumerate() {
-                        instructions.insert(start + i, new_instr);
-                    }
-
-                    // Update max_stack with calculated depth
-                    *max_stack = (*max_stack).max(needed_stack);
-
-                    debug!(
-                        "Replaced dispatcher: {} -> {} instructions, size delta: {:+} bytes, max_stack: {}",
-                        end - start,
-                        instructions.len() - start,
-                        size_delta,
-                        needed_stack
-                    );
-
-                    // Use CFG IR methods to maintain PC integrity
-                    ir.update_jump_targets(size_delta, region_start, Some(&pc_mapping))
-                        .map_err(TransformError::CoreError)?;
-
-                    ir.reindex_pcs().map_err(TransformError::CoreError)?;
-
-                    ir.rebuild_edges_for_block(node_idx)
-                        .map_err(TransformError::CoreError)?;
-
-                    changed = true;
-                    break; // Process one dispatcher per transform run
                 }
             }
         }
 
-        if changed {
-            debug!("Applied function dispatcher obfuscation with PC integrity maintained");
-        }
-
-        Ok(changed)
+        Ok(false)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::obfuscator::obfuscate_bytecode;
+    use crate::obfuscator::ObfuscationConfig;
     use azoth_core::{cfg_ir, decoder, detection, strip};
     use rand::SeedableRng;
     use tokio;
 
-    /// Helper to pretty-print dispatcher sections for debugging
+    /// Pretty-print dispatcher sections for debugging
     #[cfg(test)]
     fn print_dispatcher_section(instructions: &[Instruction], start: usize, end: usize) -> String {
         let mut result = String::new();
@@ -667,5 +694,67 @@ mod tests {
 
             debug!("PC integrity verified after dispatcher transformation");
         }
+    }
+
+    #[tokio::test]
+    async fn test_obfuscate_with_function_dispatcher() {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .try_init()
+            .ok(); // Ignore if already initialized
+
+        // Bytecode with function dispatcher pattern
+        let bytecode = "0x60003580632e64cec114601757806360fe47b1146019575b005b00";
+        let config = ObfuscationConfig::default();
+
+        tracing::debug!("Testing bytecode: {}", bytecode);
+
+        // Let's first decode and analyze the bytecode manually
+        let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+        tracing::debug!("Decoded {} instructions", instructions.len());
+
+        for (i, instr) in instructions.iter().enumerate() {
+            tracing::debug!("  [{}] PC:{} {} {:?}", i, instr.pc, instr.opcode, instr.imm);
+        }
+
+        // Test dispatcher detection directly
+        let dispatcher_detected = detection::has_dispatcher(&instructions);
+        tracing::debug!("Dispatcher detected: {}", dispatcher_detected);
+
+        if let Some(dispatcher_info) = detection::detect_function_dispatcher(&instructions) {
+            tracing::debug!("Dispatcher info: {:?}", dispatcher_info);
+        } else {
+            tracing::debug!("No dispatcher info found");
+        }
+
+        let result = obfuscate_bytecode(bytecode, config).await.unwrap();
+
+        tracing::debug!("Obfuscation result:");
+        tracing::debug!("  Original: {}", bytecode);
+        tracing::debug!("  Obfuscated: {}", result.obfuscated_bytecode);
+        tracing::debug!(
+            "  Transforms applied: {:?}",
+            result.metadata.transforms_applied
+        );
+        tracing::debug!("  Instructions added: {}", result.instructions_added);
+        tracing::debug!("  Blocks created: {}", result.blocks_created);
+
+        // Should detect dispatcher and apply FunctionDispatcher transform
+        assert!(
+            result
+                .metadata
+                .transforms_applied
+                .contains(&"FunctionDispatcher".to_string()),
+            "FunctionDispatcher transform was not applied. Applied transforms: {:?}",
+            result.metadata.transforms_applied
+        );
+        assert!(
+            result.obfuscated_bytecode != bytecode,
+            "Bytecode was not modified"
+        );
+        assert!(
+            result.instructions_added > 0 || result.blocks_created > 0,
+            "No instructions added or blocks created"
+        );
     }
 }

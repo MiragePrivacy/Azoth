@@ -66,14 +66,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if !deterministic_verified {
         return Err("Deterministic compilation failed - seed produced different results".into());
     }
-    println!("   ✅ Deterministic compilation VERIFIED");
+    println!("   Deterministic compilation VERIFIED");
 
     // Check 2: Effective obfuscation (original ≠ obfuscated)
     let obfuscation_applied = verify_obfuscation_applied(&original_bytecode, &obfuscated_bytecode);
     if !obfuscation_applied {
         return Err("No obfuscation detected - bytecode unchanged".into());
     }
-    println!("   ✅ Obfuscation transformation VERIFIED");
+    println!("   Obfuscation transformation VERIFIED");
 
     // Check 3: Functional equivalence
     let functional_equivalence =
@@ -292,7 +292,7 @@ fn generate_workflow_report(
     json!({
         "mirage_obfuscation_workflow": {
             "timestamp": chrono::Utc::now().to_rfc3339(),
-            "seed_k2": format!("0x{:x}", seed),
+            "seed_k2": format!("0x{seed:x}"),
             "bytecode_analysis": {
                 "original_bytes": original.len(),
                 "obfuscated_bytes": obfuscated.len(),
@@ -306,7 +306,7 @@ fn generate_workflow_report(
             "gas_analysis": {
                 "original_deployment_gas": gas_analysis.original_gas,
                 "obfuscated_deployment_gas": gas_analysis.obfuscated_gas,
-                "gas_increase": gas_analysis.obfuscated_gas - gas_analysis.original_gas,
+                "gas_increase": (gas_analysis.obfuscated_gas as i64 - gas_analysis.original_gas as i64),
                 "gas_overhead_percentage": gas_analysis.overhead_percentage
             },
             "verification_results": {

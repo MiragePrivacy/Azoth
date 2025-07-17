@@ -1,7 +1,7 @@
 use crate::function_dispatcher::FunctionDispatcher;
 use crate::{PassConfig, Transform};
 use azoth_core::{cfg_ir, decoder, detection, encoder, strip};
-use petgraph::visit::EdgeRef;
+use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
@@ -90,16 +90,30 @@ pub async fn obfuscate_bytecode(
     let bytes = hex::decode(bytecode_hex)?;
     let original_size = bytes.len();
 
+    tracing::debug!("Starting obfuscation pipeline:");
+    tracing::debug!("  Input size: {} bytes", original_size);
+    tracing::debug!("  Seed: 0x{:x}", config.seed);
+    tracing::debug!("  User transforms: {}", config.transforms.len());
+
     // Decode bytecode
     let input = format!("0x{bytecode_hex}");
     let (instructions, info, _) = decoder::decode_bytecode(&input, false).await?;
 
     // Step 2: Analyze instructions for unknown opcodes
     let (total_instructions, unknown_count, unknown_types) = analyze_instructions(&instructions);
+    tracing::debug!("  Total instructions: {}", total_instructions);
+    tracing::debug!("  Unknown opcodes: {}", unknown_count);
 
     // Step 3: Detect sections and strip
     let sections = detection::locate_sections(&bytes, &instructions, &info)?;
+    tracing::debug!(
+        "  Detected sections: {:?}",
+        sections.iter().map(|s| (s.kind, s.len)).collect::<Vec<_>>()
+    );
+
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections)?;
+    tracing::debug!("  Clean runtime size: {} bytes", _clean_runtime.len());
+    tracing::debug!("  Bytes saved by stripping: {}", report.bytes_saved);
 
     // Step 4: Build CFG-IR
     let mut cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report)?;
@@ -107,14 +121,23 @@ pub async fn obfuscate_bytecode(
     // Track initial metrics
     let original_block_count = cfg_ir.cfg.node_count();
     let original_instruction_count = count_instructions_in_cfg(&cfg_ir);
+    let original_bytecode_snapshot = hex::encode(&bytes);
 
-    // Step 5: Apply all transforms (function dispatcher + user transforms)
+    tracing::debug!("  CFG blocks: {}", original_block_count);
+    tracing::debug!("  CFG instructions: {}", original_instruction_count);
+
+    // Step 5: Apply transforms conditionally based on bytecode analysis
     let mut all_transforms: Vec<Box<dyn crate::Transform>> = Vec::new();
 
-    // ALWAYS add function dispatcher first
-    all_transforms.push(Box::new(FunctionDispatcher::new(
-        config.pass_config.clone(),
-    )));
+    // Only add function dispatcher if the bytecode actually contains one
+    if detection::has_dispatcher(&instructions) {
+        all_transforms.push(Box::new(FunctionDispatcher::new(
+            config.pass_config.clone(),
+        )));
+        tracing::debug!("Function dispatcher detected - adding FunctionDispatcher transform");
+    } else {
+        tracing::debug!("No function dispatcher detected - skipping FunctionDispatcher transform");
+    }
 
     let user_transform_names: Vec<String> = config
         .transforms
@@ -125,18 +148,71 @@ pub async fn obfuscate_bytecode(
     // Add user-specified transforms (this moves config.transforms)
     all_transforms.extend(config.transforms);
 
-    // Track which transforms were applied (including the mandatory ones)
-    let mut transforms_applied: Vec<String> = vec!["function_dispatcher".to_string()];
+    // Track which transforms were applied (including the mandatory ones if dispatcher exists)
+    let mut transforms_applied: Vec<String> = Vec::new();
+    if detection::has_dispatcher(&instructions) {
+        transforms_applied.push("FunctionDispatcher".to_string());
+    }
     transforms_applied.extend(user_transform_names);
 
+    // INSTRUMENTATION: Track individual transform effects
+    let mut transform_change_log = Vec::new();
+    let mut any_transform_changed = false;
+
     if !all_transforms.is_empty() {
-        crate::pass::run(
-            &mut cfg_ir,
-            &all_transforms,
-            &config.pass_config,
-            config.seed,
-        )
-        .await?;
+        // Create shared RNG from config seed
+        let mut shared_rng = rand::rngs::StdRng::seed_from_u64(config.seed);
+
+        tracing::debug!(
+            "Applying {} transforms with shared RNG seed 0x{:x}",
+            all_transforms.len(),
+            config.seed
+        );
+
+        for (i, transform) in all_transforms.iter().enumerate() {
+            let transform_name = transform.name();
+            let pre_instruction_count = count_instructions_in_cfg(&cfg_ir);
+            let pre_block_count = cfg_ir.cfg.node_count();
+
+            tracing::debug!(
+                "  Transform {}: {} (pre: {} blocks, {} instructions)",
+                i,
+                transform_name,
+                pre_block_count,
+                pre_instruction_count
+            );
+
+            // Apply transform with shared RNG
+            let transform_changed = match transform.apply(&mut cfg_ir, &mut shared_rng).await {
+                Ok(changed) => {
+                    tracing::debug!("    Result: changed={}", changed);
+                    changed
+                }
+                Err(e) => {
+                    tracing::error!("    Transform {} failed: {}", transform_name, e);
+                    false
+                }
+            };
+
+            let post_instruction_count = count_instructions_in_cfg(&cfg_ir);
+            let post_block_count = cfg_ir.cfg.node_count();
+            let instructions_delta = post_instruction_count as i32 - pre_instruction_count as i32;
+            let blocks_delta = post_block_count as i32 - pre_block_count as i32;
+
+            transform_change_log.push(format!(
+                "{transform_name}: changed={transform_changed}, blocks_delta={blocks_delta:+}, instructions_delta={instructions_delta:+}",
+            ));
+
+            any_transform_changed |= transform_changed;
+
+            tracing::debug!(
+                "    Post: {} blocks ({:+}), {} instructions ({:+})",
+                post_block_count,
+                blocks_delta,
+                post_instruction_count,
+                instructions_delta
+            );
+        }
     }
 
     // Step 6: Calculate metrics after transformation
@@ -145,8 +221,28 @@ pub async fn obfuscate_bytecode(
     let blocks_created = final_block_count.saturating_sub(original_block_count);
     let instructions_added = final_instruction_count.saturating_sub(original_instruction_count);
 
+    tracing::debug!("Transform summary:");
+    tracing::debug!("  Any transform changed: {}", any_transform_changed);
+    tracing::debug!(
+        "  Final blocks: {} ({:+})",
+        final_block_count,
+        blocks_created as i32
+    );
+    tracing::debug!(
+        "  Final instructions: {} ({:+})",
+        final_instruction_count,
+        instructions_added as i32
+    );
+    for log_entry in &transform_change_log {
+        tracing::debug!("  {}", log_entry);
+    }
+
     // Step 7: Extract and encode instructions
     let all_instructions = extract_instructions_from_cfg(&cfg_ir);
+    tracing::debug!(
+        "  Extracted {} instructions from CFG",
+        all_instructions.len()
+    );
 
     // Step 8: Encode back to bytecode
     let obfuscated_bytes = if config.preserve_unknown_opcodes {
@@ -155,11 +251,56 @@ pub async fn obfuscate_bytecode(
         encoder::encode(&all_instructions)?
     };
 
+    tracing::debug!("  Encoded to {} bytes", obfuscated_bytes.len());
+
     // Step 9: Reassemble final bytecode
     let final_bytecode = cfg_ir.clean_report.reassemble(&obfuscated_bytes);
     let obfuscated_size = final_bytecode.len();
 
-    // Step 10: Check size limits
+    // CRITICAL DEBUGGING: Compare final bytecode to original
+    let final_bytecode_snapshot = hex::encode(&final_bytecode);
+    let bytecode_actually_changed = original_bytecode_snapshot != final_bytecode_snapshot;
+
+    tracing::debug!("Bytecode comparison:");
+    tracing::debug!("  Original size: {} bytes", original_size);
+    tracing::debug!("  Final size: {} bytes", obfuscated_size);
+    tracing::debug!("  Bytecode actually changed: {}", bytecode_actually_changed);
+
+    if !bytecode_actually_changed {
+        tracing::warn!("WARNING: Final bytecode is identical to original despite transforms!");
+        tracing::warn!("  This suggests transforms didn't actually modify the bytecode");
+        tracing::warn!("  Transform change flags: {:?}", transform_change_log);
+    }
+
+    // Step 10: Detailed gas analysis
+    let original_zero_bytes = bytes.iter().filter(|&&b| b == 0).count();
+    let original_nonzero_bytes = bytes.len() - original_zero_bytes;
+    let obfuscated_zero_bytes = final_bytecode.iter().filter(|&&b| b == 0).count();
+    let obfuscated_nonzero_bytes = final_bytecode.len() - obfuscated_zero_bytes;
+
+    tracing::debug!("Gas analysis breakdown:");
+    tracing::debug!(
+        "  Original: {} zeros, {} non-zeros",
+        original_zero_bytes,
+        original_nonzero_bytes
+    );
+    tracing::debug!(
+        "  Obfuscated: {} zeros, {} non-zeros",
+        obfuscated_zero_bytes,
+        obfuscated_nonzero_bytes
+    );
+
+    let original_gas =
+        21_000 + (original_zero_bytes as u64 * 4) + (original_nonzero_bytes as u64 * 16);
+    let obfuscated_gas =
+        21_000 + (obfuscated_zero_bytes as u64 * 4) + (obfuscated_nonzero_bytes as u64 * 16);
+    let gas_delta = obfuscated_gas as i64 - original_gas as i64;
+
+    tracing::debug!("  Original gas: {}", original_gas);
+    tracing::debug!("  Obfuscated gas: {}", obfuscated_gas);
+    tracing::debug!("  Gas delta: {:+}", gas_delta);
+
+    // Step 11: Check size limits
     let size_increase_percentage = if original_size > 0 {
         ((obfuscated_size as f64 - original_size as f64) / original_size as f64) * 100.0
     } else {
@@ -229,46 +370,13 @@ fn count_instructions_in_cfg(cfg_ir: &cfg_ir::CfgIrBundle) -> usize {
         .sum()
 }
 
-/// Extract all instructions from CFG in execution order
+/// Extract all instructions from CFG
 fn extract_instructions_from_cfg(cfg_ir: &cfg_ir::CfgIrBundle) -> Vec<decoder::Instruction> {
     let mut all_instructions = Vec::new();
-    let mut visited = std::collections::HashSet::new();
-    let mut queue = std::collections::VecDeque::new();
 
-    // Find entry block
-    if let Some(entry_idx) = cfg_ir
-        .cfg
-        .node_indices()
-        .find(|&n| matches!(cfg_ir.cfg[n], cfg_ir::Block::Entry))
-    {
-        queue.push_back(entry_idx);
-    }
-
-    // BFS traversal to collect instructions in execution order
-    while let Some(current) = queue.pop_front() {
-        if visited.contains(&current) {
-            continue;
-        }
-        visited.insert(current);
-
-        if let cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[current] {
+    for node_idx in cfg_ir.cfg.node_indices() {
+        if let cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[node_idx] {
             all_instructions.extend(instructions.clone());
-        }
-
-        // Add children to queue
-        for edge in cfg_ir.cfg.edges(current) {
-            if !visited.contains(&edge.target()) {
-                queue.push_back(edge.target());
-            }
-        }
-    }
-
-    // Fallback: if BFS didn't work, collect all instructions
-    if all_instructions.is_empty() {
-        for node_idx in cfg_ir.cfg.node_indices() {
-            if let cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[node_idx] {
-                all_instructions.extend(instructions.clone());
-            }
         }
     }
 

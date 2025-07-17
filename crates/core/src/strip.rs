@@ -53,140 +53,156 @@ pub struct CleanReport {
     pub pc_map: Vec<(usize, usize)>,
 }
 
-/// Strips the bytecode to extract the runtime blob and generates a report.
+/// Strips non-runtime sections from bytecode, returning clean runtime and report.
+///
+/// This function identifies and removes constructor code, auxdata, padding, and
+/// optionally constructor arguments, leaving only the runtime bytecode that gets
+/// executed after deployment.
 ///
 /// # Arguments
-/// * `bytes` - Raw bytecode bytes.
-/// * `sections` - Detected sections from `detection.rs`.
+/// * `bytes` - The complete bytecode including constructor and runtime
+/// * `sections` - Detected sections from `detection::locate_sections`
 ///
 /// # Returns
-/// A tuple of (cleaned runtime bytecode, CleanReport), or an error if stripping fails.
+/// A tuple of (clean_runtime_bytes, cleanup_report)
 pub fn strip_bytecode(
     bytes: &[u8],
     sections: &[Section],
 ) -> Result<(Vec<u8>, CleanReport), StripError> {
-    let mut runtime_spans = Vec::new();
-    let mut removed = Vec::new();
-    let mut pc_map = Vec::new();
-    let mut old_pc = 0;
-    let mut new_pc = 0;
+    let mut clean_runtime = Vec::new();
+    let mut report = CleanReport {
+        removed: Vec::new(),
+        runtime_layout: Vec::new(),
+        swarm_hash: None,        // Will be populated if found
+        clean_len: 0,            // Will be set at the end
+        clean_keccak: [0u8; 32], // Will be calculated at the end
+        pc_map: Vec::new(),      // Will be populated if needed
+        bytes_saved: 0,
+    };
 
-    // Collect runtime spans and removed sections in one pass
-    for section in sections {
-        match section.kind {
-            SectionKind::Runtime => runtime_spans.push((section.offset, section.len)),
-            _ => {
-                if section.offset + section.len > bytes.len() {
-                    return Err(StripError::OutOfBounds(section.offset));
-                }
-                removed.push(Removed {
-                    offset: section.offset,
-                    kind: section.kind,
-                    data: bytes[section.offset..section.offset + section.len].to_vec(),
+    tracing::debug!("Stripping bytecode with {} sections", sections.len());
+
+    // Process each section and decide whether to strip or keep
+    for s in sections {
+        tracing::debug!(
+            "Processing section: {:?} at offset {} (len: {})",
+            s.kind,
+            s.offset,
+            s.len
+        );
+
+        match s.kind {
+            SectionKind::Runtime => {
+                tracing::debug!("Keeping Runtime section in clean bytecode");
+                // Runtime code goes into both the clean bytecode AND layout for reassembly
+                report.runtime_layout.push(RuntimeSpan {
+                    offset: s.offset,
+                    len: s.len,
                 });
+                clean_runtime.extend_from_slice(&bytes[s.offset..s.end()]);
+            }
+
+            // All non-runtime sections get removed and preserved for reassembly
+            _ => {
+                tracing::debug!("Stripping section: {:?}", s.kind);
+                report.removed.push(Removed {
+                    kind: s.kind,
+                    offset: s.offset,
+                    data: bytes[s.offset..s.end()].to_vec(),
+                });
+                // Count ALL non-runtime bytes as "bytes saved"
+                report.bytes_saved += s.len;
             }
         }
     }
 
-    // Validate and sort runtime spans
-    if runtime_spans.is_empty() {
+    // Validation
+    if clean_runtime.is_empty() {
         return Err(StripError::NoRuntimeFound);
     }
-    runtime_spans.sort_unstable_by_key(|&(o, _)| o);
 
-    // Convert runtime spans to layout
-    let runtime_layout: Vec<_> = runtime_spans
-        .iter()
-        .map(|&(o, l)| RuntimeSpan { offset: o, len: l })
-        .collect();
+    // Set final metadata
+    report.clean_len = clean_runtime.len();
 
-    // Concatenate runtime bytes in one allocation
-    let mut clean_runtime = Vec::with_capacity(runtime_spans.iter().map(|&(_, l)| l).sum());
-    let mut prev_end = 0;
-    for &(offset, len) in &runtime_spans {
-        if prev_end > 0 && offset > prev_end {
-            return Err(StripError::InvalidConfig); // Gap between runtime spans
-        }
-        if offset + len > bytes.len() {
-            return Err(StripError::OutOfBounds(offset));
-        }
-        clean_runtime.extend_from_slice(&bytes[offset..offset + len]);
-        // Update PC mapping
-        for _i in 0..len {
-            if old_pc < bytes.len() {
-                pc_map.push((old_pc, new_pc));
-                old_pc += 1;
-                new_pc += 1;
-            }
-        }
-        prev_end = offset + len;
-    }
-
-    // Compute bytes saved and digest
-    let bytes_saved = removed.iter().map(|r| r.data.len()).sum();
-    let clean_len = clean_runtime.len();
+    // Calculate keccak hash of clean runtime
     let mut hasher = Keccak256::new();
     hasher.update(&clean_runtime);
-    let clean_keccak = {
-        let mut result = [0u8; 32];
-        hasher.finalize_into(result.as_mut().into());
-        result
-    };
+    let hash_result = hasher.finalize();
+    report.clean_keccak.copy_from_slice(&hash_result);
 
-    // Compute Swarm hash (placeholder)
-    let swarm_hash = None;
-
-    let report = CleanReport {
-        runtime_layout,
-        removed,
-        swarm_hash,
-        bytes_saved,
-        clean_len,
-        clean_keccak,
-        pc_map,
-    };
+    tracing::debug!(
+        "Stripping complete: {} bytes clean runtime, {} bytes saved",
+        report.clean_len,
+        report.bytes_saved
+    );
 
     Ok((clean_runtime, report))
 }
 
 impl CleanReport {
-    /// Reassembles the original bytecode from the cleaned runtime and removal map.
-    ///
-    /// # Arguments
-    /// * `clean` - Cleaned runtime bytecode.
-    ///
-    /// # Returns
-    /// The reassembled original bytecode.
+    /// Reassemble bytecode by placing the clean runtime at original offsets
+    /// and filling removed sections with their original data.
     pub fn reassemble(&self, clean: &[u8]) -> Vec<u8> {
-        if self.removed.is_empty()
-            && self.runtime_layout.len() == 1
-            && self.runtime_layout[0].offset == 0
-        {
-            return clean.to_vec();
-        }
-        let mut out = vec![0u8; clean.len() + self.bytes_saved];
-
-        // Cursor into the concatenated runtime blob
-        let mut src_idx = 0;
-
-        // Merge runtime and removed slices in offset order
-        let mut all_spans: Vec<_> = self
+        // Calculate required buffer size defensively
+        let max_runtime_end = self
             .runtime_layout
             .iter()
-            .map(|r| (r.offset, r.len, true)) // true = runtime
-            .chain(self.removed.iter().map(|r| (r.offset, r.data.len(), false))) // false = removed
-            .collect();
-        all_spans.sort_unstable_by_key(|&(o, _, _)| o);
+            .map(|span| span.offset + span.len)
+            .max()
+            .unwrap_or(0);
 
-        for (off, len, is_rt) in all_spans {
-            if is_rt {
-                out[off..off + len].copy_from_slice(&clean[src_idx..src_idx + len]);
-                src_idx += len;
+        let max_removed_end = self
+            .removed
+            .iter()
+            .map(|r| r.offset + r.data.len())
+            .max()
+            .unwrap_or(0);
+
+        let required_size = max_runtime_end.max(max_removed_end).max(clean.len());
+
+        tracing::debug!(
+            "Reassembling: clean_len={}, bytes_saved={}, required_size={}",
+            clean.len(),
+            self.bytes_saved,
+            required_size
+        );
+
+        let mut out = vec![0u8; required_size];
+
+        // Copy clean runtime to original positions
+        let mut clean_pos = 0;
+        for span in &self.runtime_layout {
+            let end_pos = clean_pos + span.len;
+            if end_pos <= clean.len() && span.offset + span.len <= out.len() {
+                out[span.offset..span.offset + span.len]
+                    .copy_from_slice(&clean[clean_pos..end_pos]);
+                clean_pos = end_pos;
             } else {
-                let rem = self.removed.iter().find(|r| r.offset == off).unwrap();
-                out[off..off + len].copy_from_slice(&rem.data);
+                tracing::error!(
+                    "Reassembly bounds error: clean_pos={}, span.offset={}, span.len={}, out.len()={}",
+                    clean_pos,
+                    span.offset,
+                    span.len,
+                    out.len()
+                );
             }
         }
+
+        // Restore removed sections (constructor, auxdata, etc.)
+        for removed in &self.removed {
+            if removed.offset + removed.data.len() <= out.len() {
+                out[removed.offset..removed.offset + removed.data.len()]
+                    .copy_from_slice(&removed.data);
+            } else {
+                tracing::error!(
+                    "Reassembly bounds error: removed.offset={}, removed.data.len()={}, out.len()={}",
+                    removed.offset,
+                    removed.data.len(),
+                    out.len()
+                );
+            }
+        }
+
         out
     }
 }

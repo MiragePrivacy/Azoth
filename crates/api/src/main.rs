@@ -5,12 +5,13 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use azoth_core::{cfg_ir, decoder, detection, strip};
+use azoth_transform::obfuscator::{
+    obfuscate_bytecode, ObfuscationConfig, ObfuscationResult as PipelineResult,
+};
 use azoth_transform::{
-    jump_address_transformer::JumpAddressTransformer, opaque_predicate::OpaquePredicate, pass::run,
+    jump_address_transformer::JumpAddressTransformer, opaque_predicate::OpaquePredicate,
     shuffle::Shuffle, PassConfig, Transform,
 };
-use petgraph::visit::EdgeRef;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use tower::ServiceBuilder;
@@ -84,6 +85,8 @@ struct ObfuscationMetadata {
     seed_used: u64,
     blocks_created: usize,
     instructions_added: usize,
+    unknown_opcodes_count: usize,
+    size_limit_exceeded: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -101,7 +104,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(health_check))
-        .route("/obfuscate", post(obfuscate_bytecode))
+        .route("/obfuscate", post(obfuscate_bytecode_handler))
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
@@ -126,14 +129,15 @@ async fn health_check() -> ResponseJson<serde_json::Value> {
         "service": "azoth-api",
         "version": env!("CARGO_PKG_VERSION"),
         "features": {
+            "function_dispatcher": true,
             "shuffle": true,
             "opaque_predicates": true,
-            "jump_address_transform": true
+            "jump_address_transform": true,
         }
     }))
 }
 
-async fn obfuscate_bytecode(
+async fn obfuscate_bytecode_handler(
     Json(request): Json<ObfuscateRequest>,
 ) -> Result<ResponseJson<ObfuscateResponse>, (StatusCode, ResponseJson<ErrorResponse>)> {
     let start_time = std::time::Instant::now();
@@ -144,10 +148,10 @@ async fn obfuscate_bytecode(
     );
 
     // Normalize bytecode input
-    let bytecode = request.bytecode.trim_start_matches("0x");
+    let bytecode_hex = request.bytecode.trim_start_matches("0x");
 
     // Validate hex input
-    if hex::decode(bytecode).is_err() {
+    if hex::decode(bytecode_hex).is_err() {
         return Err((
             StatusCode::BAD_REQUEST,
             ResponseJson(ErrorResponse {
@@ -158,30 +162,38 @@ async fn obfuscate_bytecode(
     }
 
     let options = request.options.unwrap_or_default();
+    let input_bytecode = format!("0x{bytecode_hex}");
 
-    match perform_obfuscation(bytecode, &options).await {
+    match perform_obfuscation(&input_bytecode, &options).await {
         Ok(result) => {
             let execution_time = start_time.elapsed();
-            let size_increase = if result.original_size > 0 {
-                ((result.obfuscated_size as f64 - result.original_size as f64)
-                    / result.original_size as f64)
-                    * 100.0
-            } else {
-                0.0
-            };
+
+            // Calculate gas estimates using the same formula as the main workflow
+            let original_gas = calculate_deployment_gas(&hex::decode(bytecode_hex).unwrap());
+            let obfuscated_gas = calculate_deployment_gas(
+                &hex::decode(result.obfuscated_bytecode.trim_start_matches("0x")).unwrap(),
+            );
+            let gas_overhead =
+                ((obfuscated_gas as f64 - original_gas as f64) / original_gas as f64) * 100.0;
 
             let response = ObfuscateResponse {
                 obfuscated_bytecode: result.obfuscated_bytecode,
                 original_size: result.original_size,
                 obfuscated_size: result.obfuscated_size,
-                size_increase_percentage: size_increase,
-                gas_analysis: result.gas_analysis,
+                size_increase_percentage: result.size_increase_percentage,
+                gas_analysis: Some(GasAnalysis {
+                    original_gas_estimate: Some(original_gas),
+                    obfuscated_gas_estimate: Some(obfuscated_gas),
+                    gas_overhead_percentage: Some(gas_overhead),
+                }),
                 metadata: ObfuscationMetadata {
-                    transforms_applied: result.transforms_applied,
+                    transforms_applied: result.metadata.transforms_applied,
                     execution_time_ms: execution_time.as_millis() as u64,
-                    seed_used: result.seed_used,
+                    seed_used: result.metadata.seed_used,
                     blocks_created: result.blocks_created,
                     instructions_added: result.instructions_added,
+                    unknown_opcodes_count: result.unknown_opcodes_count,
+                    size_limit_exceeded: result.metadata.size_limit_exceeded,
                 },
             };
 
@@ -190,7 +202,7 @@ async fn obfuscate_bytecode(
                 execution_time.as_millis(),
                 result.original_size,
                 result.obfuscated_size,
-                size_increase
+                result.size_increase_percentage
             );
             Ok(ResponseJson(response))
         }
@@ -207,21 +219,10 @@ async fn obfuscate_bytecode(
     }
 }
 
-struct ObfuscationResult {
-    obfuscated_bytecode: String,
-    original_size: usize,
-    obfuscated_size: usize,
-    gas_analysis: Option<GasAnalysis>,
-    transforms_applied: Vec<String>,
-    seed_used: u64,
-    blocks_created: usize,
-    instructions_added: usize,
-}
-
 async fn perform_obfuscation(
-    bytecode_hex: &str,
+    bytecode: &str,
     options: &ObfuscationOptions,
-) -> Result<ObfuscationResult, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<PipelineResult, Box<dyn std::error::Error + Send + Sync>> {
     // Generate seed
     let seed = options.seed.unwrap_or_else(|| {
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -231,151 +232,56 @@ async fn perform_obfuscation(
             .as_secs()
     });
 
-    // Step 1: Decode bytecode
-    let input = format!("0x{bytecode_hex}");
-    let (instructions, info, _) = decoder::decode_bytecode(&input, false).await?;
-    let bytes = hex::decode(bytecode_hex)?;
-    let original_size = bytes.len();
-
-    // Step 2: Detect sections
-    let sections = detection::locate_sections(&bytes, &instructions, &info)?;
-
-    // Step 3: Strip to get runtime
-    let (clean_runtime, report) = strip::strip_bytecode(&bytes, &sections)?;
-
-    // Step 4: Build CFG-IR
-    let mut cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report)?;
-    let original_block_count = cfg_ir.cfg.node_count();
-    let original_instruction_count: usize = cfg_ir
-        .cfg
-        .node_indices()
-        .filter_map(|n| {
-            if let azoth_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[n] {
-                Some(instructions.len())
-            } else {
-                None
-            }
-        })
-        .sum();
-
-    // Step 5: Configure transformation parameters
+    // Configure transformation parameters
     let intensity = options.intensity.unwrap_or(0.5).clamp(0.0, 1.0);
-    let config = PassConfig {
-        accept_threshold: 0.0, // Accept all transforms for now
-        aggressive: intensity > 0.7,
-        max_size_delta: intensity, // Allow more size increase with higher intensity
-        max_opaque_ratio: intensity * 0.5, // Scale opaque predicates with intensity
-    };
 
-    // Step 6: Create transform pipeline
+    // Create transform pipeline based on options
     let mut transforms: Vec<Box<dyn Transform>> = Vec::new();
-    let mut transforms_applied = Vec::new();
 
     // Add enabled transforms
     if options.shuffle.unwrap_or(true) {
         transforms.push(Box::new(Shuffle));
-        transforms_applied.push("instruction_shuffle".to_string());
     }
 
     if options.opaque_predicates.unwrap_or(true) {
-        transforms.push(Box::new(OpaquePredicate::new(config.clone())));
-        transforms_applied.push("opaque_predicates".to_string());
+        transforms.push(Box::new(OpaquePredicate::new(PassConfig {
+            max_opaque_ratio: intensity * 0.5,
+            max_size_delta: intensity,
+            aggressive: intensity > 0.7,
+            ..Default::default()
+        })));
     }
 
     if options.jump_address_transform.unwrap_or(true) {
-        transforms.push(Box::new(JumpAddressTransformer::new(config.clone())));
-        transforms_applied.push("jump_address_transform".to_string());
+        transforms.push(Box::new(JumpAddressTransformer::new(PassConfig {
+            max_size_delta: intensity,
+            aggressive: intensity > 0.7,
+            ..Default::default()
+        })));
     }
 
-    // Step 7: Apply transforms
-    if !transforms.is_empty() {
-        run(&mut cfg_ir, &transforms, &config, seed).await?;
-    }
-
-    // Calculate transformation metrics
-    let final_block_count = cfg_ir.cfg.node_count();
-    let final_instruction_count: usize = cfg_ir
-        .cfg
-        .node_indices()
-        .filter_map(|n| {
-            if let azoth_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[n] {
-                Some(instructions.len())
-            } else {
-                None
-            }
-        })
-        .sum();
-
-    let blocks_created = final_block_count.saturating_sub(original_block_count);
-    let instructions_added = final_instruction_count.saturating_sub(original_instruction_count);
-
-    // Step 8: Extract instructions and encode back to bytecode
-    let mut all_instructions = Vec::new();
-
-    // Collect all instructions from the CFG in execution order
-    let mut visited = std::collections::HashSet::new();
-    let mut queue = std::collections::VecDeque::new();
-
-    // Find entry block
-    if let Some(entry_idx) = cfg_ir
-        .cfg
-        .node_indices()
-        .find(|&n| matches!(cfg_ir.cfg[n], azoth_core::cfg_ir::Block::Entry))
-    {
-        queue.push_back(entry_idx);
-    }
-
-    // BFS traversal to collect instructions in execution order
-    while let Some(current) = queue.pop_front() {
-        if visited.contains(&current) {
-            continue;
-        }
-        visited.insert(current);
-
-        if let azoth_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[current] {
-            all_instructions.extend(instructions.clone());
-        }
-
-        // Add children to queue
-        for edge in cfg_ir.cfg.edges(current) {
-            if !visited.contains(&edge.target()) {
-                queue.push_back(edge.target());
-            }
-        }
-    }
-
-    // If BFS didn't work (shouldn't happen), fall back to collecting all instructions
-    if all_instructions.is_empty() {
-        for node_idx in cfg_ir.cfg.node_indices() {
-            if let azoth_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[node_idx] {
-                all_instructions.extend(instructions.clone());
-            }
-        }
-    }
-
-    // Encode instructions back to bytecode
-    let obfuscated_bytes = if all_instructions.is_empty() {
-        // Fallback to original clean runtime if no instructions were collected
-        clean_runtime
-    } else {
-        azoth_core::encoder::encode(&all_instructions)
-            .map_err(|e| format!("Failed to encode obfuscated instructions: {e}"))?
+    // Create obfuscation config using the unified pipeline
+    let config = ObfuscationConfig {
+        seed,
+        transforms,
+        pass_config: PassConfig {
+            accept_threshold: 0.0,
+            aggressive: intensity > 0.7,
+            max_size_delta: intensity,
+            max_opaque_ratio: intensity * 0.5,
+        },
+        preserve_unknown_opcodes: true,
     };
 
-    // Step 9: Reassemble with non-runtime sections if needed
-    let final_bytecode = cfg_ir.clean_report.reassemble(&obfuscated_bytes);
-    let obfuscated_bytecode = format!("0x{}", hex::encode(&final_bytecode));
+    // Use the unified obfuscation pipeline from obfuscator.rs
+    obfuscate_bytecode(bytecode, config).await
+}
 
-    Ok(ObfuscationResult {
-        obfuscated_bytecode,
-        original_size,
-        obfuscated_size: final_bytecode.len(),
-        gas_analysis: None, // TODO: Implement gas analysis
-        transforms_applied,
-        seed_used: seed,
-        blocks_created,
-        instructions_added,
-    })
+/// Calculate deployment gas using EVM formula: 21000 + 4*zeros + 16*nonzeros
+fn calculate_deployment_gas(bytecode: &[u8]) -> u64 {
+    let zero_bytes = bytecode.iter().filter(|&&b| b == 0).count() as u64;
+    let non_zero_bytes = (bytecode.len() as u64) - zero_bytes;
+    21_000 + (zero_bytes * 4) + (non_zero_bytes * 16)
 }
 
 #[cfg(test)]
@@ -385,10 +291,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check() {
-        let app = Router::new().route("/health", get(health_check));
+        let app = Router::new().route("/", get(health_check));
         let server = TestServer::new(app).unwrap();
 
-        let response = server.get("/health").await;
+        let response = server.get("/").await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let body = response.json::<serde_json::Value>();
@@ -397,32 +303,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_obfuscate_simple_bytecode() {
-        let app = Router::new().route("/obfuscate", post(obfuscate_bytecode));
+    async fn test_obfuscate_with_transforms_enabled() {
+        // Initialize tracing for debugging
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .try_init()
+            .ok();
+
+        let app = Router::new().route("/obfuscate", post(obfuscate_bytecode_handler));
         let server = TestServer::new(app).unwrap();
 
+        let simple_bytecode = "0x60015b6002"; // PUSH1 1, PUSH1 2, SSTORE
+        tracing::debug!(
+            "Testing simple bytecode with transforms enabled: {}",
+            simple_bytecode
+        );
+
         let request = ObfuscateRequest {
-            bytecode: "0x6001600255".to_string(), // PUSH1 1, PUSH1 2, SSTORE
+            bytecode: simple_bytecode.to_string(),
             options: Some(ObfuscationOptions {
-                shuffle: Some(false),           // Disable shuffle for predictable test
-                opaque_predicates: Some(false), // Disable for simpler test
+                shuffle: Some(true),            // Enable shuffle
+                opaque_predicates: Some(false), // Keep others disabled for simpler test
                 jump_address_transform: Some(false),
-                seed: Some(42), // Fixed seed for reproducibility
-                intensity: Some(0.1),
+                seed: Some(42),
+                intensity: Some(0.5),
             }),
         };
+
+        tracing::debug!("Request options: {:?}", request.options);
 
         let response = server.post("/obfuscate").json(&request).await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let body = response.json::<ObfuscateResponse>();
+        tracing::debug!("Response body: {:?}", body);
+
         assert!(body.obfuscated_bytecode.starts_with("0x"));
         assert!(body.original_size > 0);
+
+        // With shuffle enabled, the bytecode should change (even without dispatcher)
+        assert_ne!(
+            body.obfuscated_bytecode, simple_bytecode,
+            "Bytecode should change when shuffle is enabled"
+        );
     }
 
     #[tokio::test]
     async fn test_invalid_bytecode() {
-        let app = Router::new().route("/obfuscate", post(obfuscate_bytecode));
+        let app = Router::new().route("/obfuscate", post(obfuscate_bytecode_handler));
         let server = TestServer::new(app).unwrap();
 
         let request = ObfuscateRequest {
@@ -435,5 +363,33 @@ mod tests {
 
         let body = response.json::<ErrorResponse>();
         assert!(body.error.contains("Invalid hex bytecode"));
+    }
+
+    #[tokio::test]
+    async fn test_deterministic_obfuscation() {
+        let app = Router::new().route("/obfuscate", post(obfuscate_bytecode_handler));
+        let server = TestServer::new(app).unwrap();
+
+        let request = ObfuscateRequest {
+            bytecode: "0x6001600255".to_string(),
+            options: Some(ObfuscationOptions {
+                seed: Some(42), // Fixed seed
+                ..Default::default()
+            }),
+        };
+
+        // First obfuscation
+        let response1 = server.post("/obfuscate").json(&request).await;
+        assert_eq!(response1.status_code(), StatusCode::OK);
+        let body1 = response1.json::<ObfuscateResponse>();
+
+        // Second obfuscation with same seed
+        let response2 = server.post("/obfuscate").json(&request).await;
+        assert_eq!(response2.status_code(), StatusCode::OK);
+        let body2 = response2.json::<ObfuscateResponse>();
+
+        // Should produce identical results
+        assert_eq!(body1.obfuscated_bytecode, body2.obfuscated_bytecode);
+        assert_eq!(body1.metadata.seed_used, body2.metadata.seed_used);
     }
 }
