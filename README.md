@@ -36,62 +36,52 @@ Azoth tracks three key metrics to ensure obfuscation quality. **Potency** measur
 
 Every transform must raise Potency and Resilience above clearly defined thresholds while keeping Cost below the defined threshold, otherwise it is rejected. This ensures that obfuscation meaningfully improves privacy without creating impractical deployment costs.
 
-## Installation and Setup
-
-Azoth requires Rust edition 2024, which needs the nightly toolchain. Install it with `rustup toolchain install nightly` followed by `rustup default nightly`. 
-
-Build from source by cloning the repository, entering the directory, and running `cargo build --release`. Install the CLI with `cargo install --path crates/cli`.
+## Formal Verification System
+Azoth incorporates a formal verification system that provides mathematical guarantees of functional and semantic equivalence between original and obfuscated contracts. This addresses the critical challenge that traditional testing can only verify specific cases, while smart contracts must handle infinite input combinations.
 
 ## Usage Guide
 
-### Basic Commands
+Azoth provides a comprehensive CLI tool for local development, testing, and experimentation with bytecode obfuscation. This CLI interface allows developers to analyze, strip, visualize, and obfuscate EVM bytecode during the development process.
 
-**Decode Bytecode** parses and displays bytecode instructions. Use `azoth decode` followed by either a hex string like `0x608060405234801561001057600080fd5b50...` or a file reference like `@bytecode.hex`.
+### CLI Tool Installation
 
-**Strip Bytecode** isolates runtime code from constructor and auxiliary data. The command `azoth strip` accepts the same input formats, with an optional `--raw` flag for binary input.
-
-**Generate Control Flow Graph** creates a visual representation of the control flow. Use `azoth cfg` with your bytecode input, optionally specifying output with `-o cfg_output.dot`.
-
-**Obfuscate Bytecode** applies the transformation passes. Basic usage is `azoth obfuscate` with your input, optionally specifying a seed with `--seed 12345` for deterministic results.
-
-### Advanced Configuration
-
-Configure specific obfuscation passes by listing them with the `--passes` flag. Available transforms include `opaque_predicate` for injecting always-true/false conditions, `shuffle` for reordering basic blocks while preserving semantics, `jump_transform` for modifying jump targets to obscure control flow, and `stack_noise` for adding semantically neutral stack operations.
-
-Threshold configuration controls when transforms are accepted. The `--accept-threshold` flag sets the minimum improvement required (default 0.1), while `--max-size-delta` limits bytecode size increases (default 0.25).
-
-Working with different input formats is straightforward. Hex strings work with or without the 0x prefix. File input uses the @ prefix like `@contract.hex`. Raw binary input adds the `--raw` flag.
-
-Deterministic compilation ensures reproducibility. The same seed always produces identical output, while different seeds create different obfuscation patterns. This allows for controlled experimentation and consistent deployment strategies.
-
-### Output Options
-
-Save results to a file with `--emit output.hex`. Display detailed metrics with `--verbose`. JSON output format is available with `--format json`.
-
-## Examples
-
-### Basic ERC20 Obfuscation
+The CLI tool is included for local testing and development purposes:
 
 ```bash
-curl -o erc20.hex "https://api.etherscan.io/api?module=proxy&action=eth_getCode&address=0xA0b86a33E6441E1e623A71e86c5e5e8C2A92a0B7"
-azoth strip @erc20.hex
-azoth cfg @erc20.hex -o erc20_cfg.dot
-azoth obfuscate @erc20.hex --seed 12345 --emit erc20_obfuscated.hex
+# Build the development CLI
+cargo build --release
+
+# The CLI binary will be available at target/release/azoth
+# Or install it locally
+cargo install --path crates/cli
 ```
 
-### High-Strength Obfuscation
+### Basic CLI Usage
+
+The CLI provides four main commands for bytecode analysis and obfuscation:
 
 ```bash
-azoth obfuscate @contract.hex --seed 67890 --passes "opaque_predicate,shuffle,jump_transform,stack_noise" --accept-threshold 0.20 --max-size-delta 0.30 --emit heavily_obfuscated.hex --verbose
+# Decode bytecode to annotated assembly
+azoth decode "0x608060405234801561001057600080fd5b50..."
+
+# Strip and analyze bytecode sections  
+azoth strip bytecode.hex
+
+# Generate control flow graph visualization
+azoth cfg -o analysis.dot bytecode.hex
+
+# Apply obfuscation transforms
+azoth obfuscate --seed 12345 --passes "shuffle,jump_transform,opaque_pred" bytecode.hex
 ```
 
-### Batch Processing
+For detailed CLI documentation, command options, and usage examples, run:
 
 ```bash
-for contract in contracts/*.hex; do
-  azoth obfuscate "@$contract" --seed 12345 --emit "obfuscated_$(basename $contract)"
-done
+azoth --help
+azoth <command> --help
 ```
+
+The CLI tool accepts various input formats (hex strings, .hex files, binary files) and provides comprehensive output options including JSON reports, Graphviz visualizations, and detailed metrics analysis.
 
 ## Production Readiness
 
@@ -101,11 +91,16 @@ Azoth is being prepared for production deployment with comprehensive testing of 
 
 Azoth welcomes contributions in new obfuscation transforms, improved metrics and analysis, performance optimizations, documentation improvements, and bug reports with fixes. See our contributing guidelines for detailed information.
 
-### Development and Testing
+### Testing & Development
 
-Run all tests with `cargo test`. Target specific tests with `cargo test test_opaque_predicate`. End-to-end tests are available with `cargo test --test e2e_erc20`.
+| Command    | Description            |
+| ---------- | ---------------------- |
+| `cargo cc` | Clippy all packages    |
+| `cargo tt` | Run all tests          |
+| `cargo be` | Build all examples     |
+| `cargo te` | Run tests for examples |
 
-Maintain code quality with `cargo fmt` for formatting and `cargo clippy` for issue detection. Performance benchmarks run with `cargo bench`.
+We're using `cargo-nextest` for testing, the commands above are described in [.cargo/config.toml](.cargo/config.toml).
 
 
 ## Acknowledgments
