@@ -95,10 +95,9 @@ Azoth welcomes contributions in new obfuscation transforms, improved metrics and
 
 | Command    | Description            |
 | ---------- | ---------------------- |
+| `cargo bb` | Build packages         |
 | `cargo cc` | Clippy all packages    |
 | `cargo tt` | Run all tests          |
-| `cargo be` | Build all examples     |
-| `cargo te` | Run tests for examples |
 
 We're using `cargo-nextest` for testing, the commands above are described in [.cargo/config.toml](.cargo/config.toml).
 
