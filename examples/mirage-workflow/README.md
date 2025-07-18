@@ -4,7 +4,7 @@
 
 1. initial setup:
 ```bash
-cd crates/examples/mirage-workflow
+cd examples/mirage-workflow
 chmod +x complete-setup.sh
 ./complete-setup.sh
 ```

@@ -1,4 +1,4 @@
-use crate::util::{PassConfig, Transform};
+use crate::{PassConfig, Transform};
 use async_trait::async_trait;
 use azoth_core::cfg_ir::{Block, CfgIrBundle, EdgeType};
 use azoth_core::decoder::Instruction;

@@ -1,4 +1,4 @@
-use crate::util::{PassConfig, Transform};
+use crate::{PassConfig, Transform};
 use async_trait::async_trait;
 use azoth_analysis::{collect_metrics, compare};
 use azoth_core::cfg_ir::CfgIrBundle;
@@ -27,7 +27,7 @@ impl Pass for DefaultPass {
         &self,
         ir: &mut CfgIrBundle,
         passes: &[Box<dyn Transform>],
-        cfg: &PassConfig,
+        config: &PassConfig,
         seed: u64,
     ) -> Result<(), TransformError> {
         let mut rng = StdRng::seed_from_u64(seed);
@@ -44,7 +44,7 @@ impl Pass for DefaultPass {
             let after = collect_metrics(&snapshot, &snapshot.clean_report)?;
             let delta = compare(&before, &after);
 
-            let keep = delta >= cfg.accept_threshold || cfg.aggressive;
+            let keep = delta >= config.accept_threshold || config.aggressive;
             info!(
                 "{:>14} Δ{:+.2} {}",
                 pass.name(),

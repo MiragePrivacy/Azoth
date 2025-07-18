@@ -48,6 +48,8 @@ pub enum DetectError {
     Overlap(usize),
     #[error("gap detected at offset {0}")]
     Gap(usize),
+    #[error("section extends beyond bytecode bounds at offset {0}")]
+    OutOfBounds(usize),
     #[error("auxdata overlap detected")]
     AuxdataOverlap,
 }
