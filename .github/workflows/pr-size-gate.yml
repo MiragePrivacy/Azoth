@@ -1,0 +1,27 @@
+name: PR size gate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  check-size:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Count added lines
+        id: diff
+        run: |
+          # Count additions between PR head (current) and its base branch
+          ADDED=$(git diff --numstat origin/${{ github.base_ref }}...HEAD \
+                  | awk '{added += $1} END {print added}')
+          echo "Added lines: $ADDED"
+          echo "added=$ADDED" >> "$GITHUB_OUTPUT"
+
+      - name: Fail if over limit
+        if: ${{ steps.diff.outputs.added > 500 }}
+        run: |
+          echo "::error::Pull-request adds more than 500 lines (${{ steps.diff.outputs.added }})"
+          exit 1
