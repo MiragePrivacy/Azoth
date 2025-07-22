@@ -26,7 +26,7 @@ Shuffled -> 0x5b60026001
 
 ###  Opaque Predicate (`opaque_predicate.rs`)
 
-Injects always-true conditional branches using Keccak256 hash equality checks. Adds dummy control flow paths that increase CFG complexity but never execute.
+Injects always-true (or always-false) predicates built from cheap arithmetic or constant-equality (e.g., XOR + ISZERO or EQ on identical constants). Adds dummy control-flow that never influences observable behavior but explodes CFG shape.
 
 Example
 
@@ -38,20 +38,21 @@ PUSH1 0x01
 PUSH1 0x03
 ```
 
-After OpaquePredicate: (~88-108 bytes, 12 instructions, 3 blocks)
+After OpaquePredicate: (~80–100 bytes, ~12 instructions, 3 blocks; seed-dependent)
 ```assembly
 // Original block (now with predicate appended)
 PUSH1 0x01
 PUSH1 0x02
 PUSH1 0x01
 PUSH1 0x03
-PUSH32 0x1234...5678    // Same 32-byte constant
-PUSH32 0x1234...5678    // Same 32-byte constant  
-EQ                      // Always true (constant == constant)
-PUSH2 true_pc           // Branch to true_label if equal
+PUSH32 C                // Random 32-byte constant
+PUSH32 C                // Same constant
+XOR                     // 0
+ISZERO                  // -> 1 (true)
+PUSH2 true_pc
 JUMPI
-JUMPDEST                // False path continues here
-JUMP false_pc           // Jump to false_label
+JUMPDEST                // Join point (false path)
+JUMP false_pc
 
 // New true_label block
 JUMPDEST                // True branch target (always taken)
@@ -81,7 +82,7 @@ JUMPDEST      // Jump destination at 0x08
 STOP
 ```
 
-After JumpAddressTransformer: 0x6004600401575760015b00 (10 bytes, 7 instructions, 3 blocks)
+After JumpAddressTransformer: 0x60046004015760015b00 (10 bytes, 7 instructions, 3 blocks)
 ```assembly
 PUSH1 0x04    // First part of split target
 PUSH1 0x04    // Second part (0x04 + 0x04 = 0x08)
@@ -92,7 +93,7 @@ JUMPDEST      // Same jump destination
 STOP
 ```
 
-Changes: +3 bytes, +2 instructions, replaces direct jump target 0x08 with runtime computation 0x04 + 0x04, adding +6 gas cost but obscuring static jump analysis.
+Changes: +3 bytes, +2 instructions; replaces direct 0x08 with 0x04 + 0x04 via ADD. Net +6 gas (2 extra PUSH1s + ADD – original single PUSH1).
 
 ### Function Dispatcher (function_dispatcher.rs)
 
@@ -146,7 +147,7 @@ Changes:
 - Inverted the branch with ISZERO (and swapped jump targets).
 - Added a “fake” branch (PUSH1 0x59; JUMP) that jumps into padding.
 - Replaced the second selector 0x60fe47b1 with 0x3fad005b.
-- Inserted 62 extra STOP (0x00) bytes as padding while keeping the non‑zero‑byte count unchanged (24).
+- Inserted 62 zero bytes (`0x00`, decoded as STOP) as padding while keeping the non‑zero‑byte count unchanged (24).
 
 ### Transform Interface
 
