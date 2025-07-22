@@ -11,178 +11,176 @@ The transforms crate implements a pass-based architecture where each transformat
 3. **Metrics Integration** - Continuous evaluation during transformation
 4. **Rollback Support** - Automatic rejection of ineffective passes
 
-## Key Components
+## Current Transforms
 
-### Pass Interface (`pass.rs`)
-Defines the standardized interface for all obfuscation transformations. The pass system enables modular composition of different obfuscation techniques with automatic metrics-based validation.
+### Shuffle (`shuffle.rs`)
 
-Key traits and structures:
-- `TransformPass` - Core interface for all transformation passes
-- `PassResult` - Transformation outcome with metrics
-- `PassConfig` - Configuration parameters for each pass
-- `PassManager` - Orchestrates pass execution and rollback
+Reorders basic blocks within the CFG while updating jump targets to maintain correctness. Simple block-level randomization that changes program layout without affecting execution.
 
-### Opaque Predicates (`opaque_predicate.rs`)
-Implements opaque predicate injection to increase control flow complexity. Opaque predicates are expressions that always evaluate to true or false but appear non-trivial to static analysis.
+Example
 
-Transformation features:
-- **Invariant Injection** - Algebraic expressions with known outcomes
-- **Stack Manipulation** - Complex stack operations that preserve semantics
-- **Control Flow Splitting** - Branch injection with deterministic outcomes
-- **Pattern Diversification** - Multiple predicate forms to avoid detection
+```
+Original -> 0x60015b6002
+Shuffled -> 0x5b60026001
+```
 
-Example transformations:
+###  Opaque Predicate (`opaque_predicate.rs`)
+
+Injects always-true conditional branches using Keccak256 hash equality checks. Adds dummy control flow paths that increase CFG complexity but never execute.
+
+Example
+
+Original bytecode: 0x6001600260016003 (8 bytes, 4 instructions, 1 block)
+```assembly
+PUSH1 0x01
+PUSH1 0x02  
+PUSH1 0x01
+PUSH1 0x03
+```
+
+After OpaquePredicate: (~88-108 bytes, 12 instructions, 3 blocks)
+```assembly
+// Original block (now with predicate appended)
+PUSH1 0x01
+PUSH1 0x02
+PUSH1 0x01
+PUSH1 0x03
+PUSH32 0x1234...5678    // Same 32-byte constant
+PUSH32 0x1234...5678    // Same 32-byte constant  
+EQ                      // Always true (constant == constant)
+PUSH2 true_pc           // Branch to true_label if equal
+JUMPI
+JUMPDEST                // False path continues here
+JUMP false_pc           // Jump to false_label
+
+// New true_label block
+JUMPDEST                // True branch target (always taken)
+// execution continues to original fallthrough
+
+// New false_label block  
+JUMPDEST                // False branch target (never reached)
+PUSH1 0x00
+JUMP <original_fallthrough>  // Dead code path
+```
+
+Changes: +80-100 bytes, splits 1 block into 3, adds always-true branching that never affects execution but complicates CFG analysis.
+
+### Jump Address Transformer (`jump_address_transformer.rs`)
+
+Splits jump targets into arithmetic operations. Replaces PUSH1 0x42 JUMP with PUSH1 0x20 PUSH1 0x22 ADD JUMP where the values sum to the original target.
+
+Example
+
+Original bytecode: 0x60085760015b00 (7 bytes, 5 instructions, 3 blocks)
+
+```assembly
+PUSH1 0x08    // Direct jump target
+JUMPI         // Conditional jump to 0x08
+PUSH1 0x01    // Fallthrough path  
+JUMPDEST      // Jump destination at 0x08
+STOP
+```
+
+After JumpAddressTransformer: 0x6004600401575760015b00 (10 bytes, 7 instructions, 3 blocks)
+```assembly
+PUSH1 0x04    // First part of split target
+PUSH1 0x04    // Second part (0x04 + 0x04 = 0x08)
+ADD           // Compute original target at runtime
+JUMPI         // Conditional jump to computed value
+PUSH1 0x01    // Fallthrough path unchanged
+JUMPDEST      // Same jump destination  
+STOP
+```
+
+Changes: +3 bytes, +2 instructions, replaces direct jump target 0x08 with runtime computation 0x04 + 0x04, adding +6 gas cost but obscuring static jump analysis.
+
+### Function Dispatcher (function_dispatcher.rs)
+
+Obfuscates Solidity function dispatcher patterns by randomizing selector check order, adding dummy comparisons, and using different comparison patterns.
+
+Example
+
+Original dispatcher:
+```assembly
+PUSH1 0x00
+CALLDATALOAD
+DUP1
+PUSH4 0x2e64cec1    // Real selector A
+EQ
+PUSH1 0x17          // Jump to function A
+JUMPI
+DUP1  
+PUSH4 0x60fe47b1    // Real selector B
+EQ
+PUSH1 0x19          // Jump to function B  
+JUMPI
+JUMPDEST            // Function A
+STOP
+JUMPDEST            // Function B
+STOP
+```
+
+Obfuscated dispatcher:
+```
+PUSH1 0x00
+CALLDATALOAD
+PUSH1 0xE0
+SHR                 // Explicit selector extraction
+DUP1
+PUSH4 0x2e64cec1    // Real selector A (kept)
+EQ
+ISZERO              // Inverted branch logic
+PUSH1 0x62          // Jump past padding if NOT equal
+JUMPI
+PUSH1 0x59          // Dummy branch target
+JUMP
+DUP1
+PUSH4 0x3fad005b    // Fake selector (was 0x60fe47b1)
+EQ
+STOP                // Dead code + 62 bytes of 0x00 padding
+```
+
+Changes:
+- 27 bytes → 89 bytes, +248 (≈ 1.2 %) gas
+- Inserted PUSH1 0xE0; SHR.
+- Inverted the branch with ISZERO (and swapped jump targets).
+- Added a “fake” branch (PUSH1 0x59; JUMP) that jumps into padding.
+- Replaced the second selector 0x60fe47b1 with 0x3fad005b.
+- Inserted 62 extra STOP (0x00) bytes as padding while keeping the non‑zero‑byte count unchanged (24).
+
+### Transform Interface
+
 ```rust
-// Original: PUSH1 0x10
-// Transformed: PUSH1 0x05 PUSH1 0x0B ADD
-//              DUP1 PUSH1 0x10 EQ 
-//              PUSH1 target JUMPI
-//              REVERT
-//              JUMPDEST
+#[async_trait]
+pub trait Transform: Send + Sync {
+    fn name(&self) -> &'static str;
+    async fn apply(&self, ir: &mut CfgIrBundle, rng: &mut StdRng) -> Result<bool, TransformError>;
+}
 ```
 
-### Instruction Shuffling (`shuffle.rs`)
-Implements basic block and instruction reordering to obscure program structure while maintaining semantic equivalence. Shuffling transforms linear code sequences into equivalent but structurally different forms.
-
-Shuffling techniques:
-- **Basic Block Reordering** - Randomized block sequence with corrected jumps
-- **Instruction Interleaving** - Safe reordering within basic blocks
-- **Stack Balancing** - Maintaining stack consistency across shuffles
-- **Jump Target Updates** - Correcting addresses after reordering
-
-### Jump Address Transformation (`jump_address_transformer.rs`)
-Modifies jump targets and control flow patterns to obscure program structure. This pass makes static analysis more difficult by introducing indirect jumps and computed addresses.
-
-Transformation approaches:
-- **Indirect Jumps** - Convert direct jumps to computed addresses
-- **Jump Table Obfuscation** - Encrypt jump target tables
-- **Address Computation** - Complex calculations for jump targets
-- **Control Flow Flattening** - Reduce nested structures to linear dispatch
-
-### Utility Functions (`util.rs`)
-Provides common functionality used across multiple transformation passes including instruction analysis, stack tracking, and semantic validation.
-
-Utility features:
-- **Instruction Classification** - Categorize instructions by behavior
-- **Stack State Tracking** - Monitor stack depth and contents
-- **Semantic Validation** - Ensure transformations preserve behavior
-- **Random Number Generation** - Deterministic randomness for reproducibility
-
-## Usage Example
-
+### Pass Execution
+The pass.rs module provides a simple sequential pass runner:
 ```rust
-use azoth_transform::{
-    PassManager, OpaquePredicatePass, ShufflePass, JumpTransformPass
-};
-use azoth_core::{build_cfg_ir, decode_bytecode};
+use azoth_transform::{run, PassConfig};
 
-// Create pass manager with configuration
-let mut pass_manager = PassManager::new(PassConfig {
-    seed: 12345,
-    max_passes: 10,
-    threshold_config: ThresholdConfig::default(),
-});
+let transforms: Vec<Box<dyn Transform>> = vec![
+    Box::new(Shuffle),
+    Box::new(OpaquePredicate::new(PassConfig::default())),
+    Box::new(JumpAddressTransformer::new(PassConfig::default())),
+];
 
-// Register transformation passes
-pass_manager.register_pass(Box::new(OpaquePredicatePass::new()));
-pass_manager.register_pass(Box::new(ShufflePass::new()));
-pass_manager.register_pass(Box::new(JumpTransformPass::new()));
-
-// Apply transformations to CFG
-let (instructions, _, _) = decode_bytecode(&bytecode, false).await?;
-let cfg_bundle = build_cfg_ir(&instructions, &sections, &bytecode, report)?;
-
-// Execute transformation passes
-let transformed_cfg = pass_manager.apply_passes(&cfg_bundle)?;
-
-// Encode back to bytecode
-let obfuscated_bytecode = encode_cfg(&transformed_cfg)?;
+run(&mut cfg_ir, &transforms, &PassConfig::default(), seed).await?;
 ```
 
-## Pass Configuration
-
-Each transformation pass supports detailed configuration:
-
+### Configuration
+Basic configuration through PassConfig:
 ```rust
-use azoth_transform::{OpaquePredicateConfig, ShuffleConfig};
-
-let opaque_config = OpaquePredicateConfig {
-    injection_probability: 0.3,
-    max_complexity: 5,
-    use_stack_predicates: true,
-    diversify_patterns: true,
-};
-
-let shuffle_config = ShuffleConfig {
-    block_shuffle_probability: 0.8,
-    instruction_interleave: true,
-    preserve_semantics: true,
-    max_reorder_distance: 10,
-};
+pub struct PassConfig {
+    pub accept_threshold: f64,      // Minimum quality threshold
+    pub aggressive: bool,           // Skip quality gates
+    pub max_size_delta: f32,        // Max size increase ratio
+    pub max_opaque_ratio: f32,      // Max blocks to apply opaque predicates
+}
 ```
 
-## Metrics Integration
-
-All transformation passes integrate with the analysis crate for continuous evaluation:
-
-```rust
-use azoth_analysis::{MetricsBundle, ThresholdConfig};
-
-let threshold_config = ThresholdConfig {
-    min_potency_improvement: 2.0,
-    min_resilience_improvement: 1.5,
-    max_cost_increase: 10.0,
-};
-
-// Passes automatically rollback if metrics don't improve
-let result = pass_manager.apply_with_thresholds(&cfg_bundle, &threshold_config)?;
-```
-
-## Semantic Preservation
-
-All transformations maintain semantic equivalence through:
-
-1. **Stack Consistency** - Preserving stack state at block boundaries
-2. **Control Flow Integrity** - Maintaining reachability and execution paths
-3. **Data Flow Preservation** - Ensuring variable values remain consistent
-4. **Gas Behavior** - Keeping gas consumption patterns similar
-
-## Deterministic Obfuscation
-
-Transformations are deterministic based on seed values:
-
-```rust
-use azoth_transform::DeterministicConfig;
-
-let config = DeterministicConfig {
-    seed: 0x1234567890abcdef,
-    reproducible: true,
-};
-
-// Same input + same seed = identical output
-let result1 = apply_obfuscation(&bytecode, &config)?;
-let result2 = apply_obfuscation(&bytecode, &config)?;
-assert_eq!(result1, result2);
-```
-
-## Testing
-
-Comprehensive test coverage for all transformation passes:
-
-```bash
-cargo test --lib
-cargo test test_opaque_predicate_injection
-cargo test test_shuffle_preservation
-cargo test test_jump_transformation
-cargo test test_semantic_equivalence
-```
-
-## Dependencies
-
-- `azoth-core` - Core bytecode processing and CFG/IR
-- `azoth-analysis` - Metrics and threshold validation
-- `azoth-utils` - Common utility functions
-- `petgraph` - Graph algorithms for CFG manipulation
-- `rand` - Deterministic random number generation
-
-The transforms crate provides the essential obfuscation capabilities that make Azoth effective at protecting smart contract privacy while maintaining functional correctness and acceptable performance characteristics.
+The transforms operate on CfgIrBundle structures and use metrics from azoth-analysis to evaluate effectiveness.
