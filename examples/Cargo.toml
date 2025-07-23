@@ -1,5 +1,5 @@
 [package]
-name = "mirage-workflow"
+name = "azoth-examples"
 version.workspace = true
 edition.workspace = true
 

@@ -5,19 +5,17 @@ pub mod opaque_predicate;
 pub mod pass;
 pub mod shuffle;
 
-use async_trait::async_trait;
 use azoth_core::cfg_ir::CfgIrBundle;
 use azoth_utils::errors::TransformError;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 
 /// Trait for bytecode obfuscation transforms.
-#[async_trait]
 pub trait Transform: Send + Sync {
     /// Returns the transform's name for logging and identification.
     fn name(&self) -> &'static str;
     /// Applies the transform to the CFG IR, returning whether changes were made.
-    async fn apply(&self, ir: &mut CfgIrBundle, rng: &mut StdRng) -> Result<bool, TransformError>;
+    fn apply(&self, ir: &mut CfgIrBundle, rng: &mut StdRng) -> Result<bool, TransformError>;
 }
 
 /// Configuration for transform passes.

@@ -1,5 +1,4 @@
 use crate::Transform;
-use async_trait::async_trait;
 use azoth_core::cfg_ir::{Block, CfgIrBundle};
 use azoth_core::decoder::Instruction;
 use azoth_core::encoder;
@@ -11,13 +10,12 @@ use tracing::debug;
 
 pub struct Shuffle;
 
-#[async_trait]
 impl Transform for Shuffle {
     fn name(&self) -> &'static str {
         "Shuffle"
     }
 
-    async fn apply(&self, ir: &mut CfgIrBundle, rng: &mut StdRng) -> Result<bool, TransformError> {
+    fn apply(&self, ir: &mut CfgIrBundle, rng: &mut StdRng) -> Result<bool, TransformError> {
         let mut blocks: Vec<(usize, &Block)> = ir
             .cfg
             .node_indices()
@@ -75,7 +73,7 @@ impl Transform for Shuffle {
 
         let new_bytecode = encoder::encode(&new_instrs)
             .map_err(|e| TransformError::EncodingError(e.to_string()))?;
-        ir.replace_body(new_bytecode, &[]).await?;
+        ir.replace_body(new_instrs, &[], new_bytecode)?;
         Ok(true)
     }
 }
@@ -144,7 +142,7 @@ mod tests {
         let before = collect_metrics(&cfg_ir, &cfg_ir.clean_report).unwrap();
         let mut rng = StdRng::seed_from_u64(42);
         let transform = Shuffle;
-        let changed = transform.apply(&mut cfg_ir, &mut rng).await.unwrap();
+        let changed = transform.apply(&mut cfg_ir, &mut rng).unwrap();
         let after = collect_metrics(&cfg_ir, &cfg_ir.clean_report).unwrap();
         assert!(changed, "Shuffle should reorder blocks");
         assert_eq!(

@@ -19,4 +19,3 @@ tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 thiserror.workspace = true
-anyhow.workspace = true

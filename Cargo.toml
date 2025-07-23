@@ -4,7 +4,7 @@ members = [
   "crates/cli", "crates/core",
   "crates/transforms", 
   "crates/utils", "crates/verification",
-  "examples/mirage-workflow",
+  "tests", "examples"
 ]
 resolver = "2"
 
@@ -49,3 +49,4 @@ azoth-cli = { path = "crates/cli" }
 azoth-analysis = { path = "crates/analysis" }
 azoth-transform = { path = "crates/transforms" }
 azoth-utils = { path = "crates/utils" }
+azoth-verification = { path = "crates/verification" }

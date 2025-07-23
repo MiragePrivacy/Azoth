@@ -1,0 +1,22 @@
+[package]
+name = "tests"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+azoth-core.workspace = true
+azoth-transform.workspace = true
+azoth-analysis.workspace = true
+azoth-verification.workspace = true
+azoth-utils.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+tracing.workspace = true
+hex.workspace = true
+heimdall.workspace = true
+tempfile.workspace = true
+axum-test.workspace = true
+serde_json.workspace = true
+axum.workspace = true
+petgraph.workspace = true
+rand.workspace = true

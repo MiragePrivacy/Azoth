@@ -150,16 +150,12 @@ impl CfgIrBundle {
     ///
     /// # Returns
     /// A `Result` indicating success or a `CfgIrError` if rebuilding fails.
-    pub async fn replace_body(
+    pub fn replace_body(
         &mut self,
-        new_bytecode: Vec<u8>,
+        instructions: Vec<Instruction>,
         sections: &[Section],
+        new_bytecode: Vec<u8>,
     ) -> Result<(), CfgIrError> {
-        let (instructions, _, _) =
-            crate::decoder::decode_bytecode(&format!("0x{}", hex::encode(&new_bytecode)), false)
-                .await
-                .map_err(CfgIrError::DecodeError)?;
-
         let clean_report = self.clean_report.clone();
         let new_bundle = build_cfg_ir(&instructions, sections, &new_bytecode, clean_report)?;
 
@@ -971,97 +967,5 @@ impl CfgIrBundle {
         }
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{decoder, detection, strip};
-    use tokio;
-    use tracing_subscriber;
-
-    #[tokio::test]
-    async fn test_build_cfg_ir_simple() {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
-        let bytecode = "0x600160015601"; // PUSH1 0x01, PUSH1 0x01, ADD
-        let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
-        let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
-        let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-
-        let cfg_ir =
-            build_cfg_ir(&instructions, &sections, &bytes, report).expect("CFG builder failed");
-        assert_eq!(cfg_ir.cfg.node_count(), 4); // Entry, two blocks, Exit
-        assert_eq!(cfg_ir.pc_to_block.len(), 2); // Two body blocks mapped
-    }
-
-    #[tokio::test]
-    async fn test_build_cfg_ir_straight_line() {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
-        let bytecode = "0x600050"; // PUSH1 0x00, STOP
-        let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
-        let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
-        let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-
-        let cfg_ir =
-            build_cfg_ir(&instructions, &sections, &bytes, report).expect("CFG builder failed");
-        assert_eq!(cfg_ir.cfg.node_count(), 3); // Entry, single block, Exit
-        assert_eq!(cfg_ir.cfg.edge_count(), 2); // Entry->block, block->Exit
-    }
-
-    #[tokio::test]
-    async fn test_build_cfg_ir_diamond() {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
-        let bytecode = "0x6000600157600256"; // PUSH1 0x00, JUMPI, JUMPDEST, STOP
-        let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
-        let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
-        let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-
-        let cfg_ir =
-            build_cfg_ir(&instructions, &sections, &bytes, report).expect("CFG builder failed");
-        assert_eq!(cfg_ir.cfg.node_count(), 4); // Entry, two blocks, Exit
-        assert_eq!(cfg_ir.cfg.edge_count(), 2); // Entry->block1, BranchFalse
-    }
-
-    #[tokio::test]
-    async fn test_build_cfg_ir_loop() {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
-        let bytecode = "0x60005b6000"; // PUSH1 0x00, JUMPDEST, PUSH1 0x00
-        let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
-        let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
-        let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-
-        let cfg_ir =
-            build_cfg_ir(&instructions, &sections, &bytes, report).expect("CFG builder failed");
-        assert_eq!(cfg_ir.cfg.node_count(), 4); // Entry, two blocks, Exit
-        assert_eq!(cfg_ir.cfg.edge_count(), 3); // Entry->block0, block0->block2, block2->Exit
-    }
-
-    #[tokio::test]
-    async fn test_build_cfg_ir_malformed() {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
-        let bytecode = "0x6001"; // PUSH1 0x01, no terminal
-        let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
-        let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
-        let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-
-        let cfg_ir =
-            build_cfg_ir(&instructions, &sections, &bytes, report).expect("CFG builder succeeded");
-        assert_eq!(cfg_ir.cfg.node_count(), 3); // Entry, lone block, Exit
     }
 }

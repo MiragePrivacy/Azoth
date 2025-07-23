@@ -183,7 +183,7 @@ pub async fn obfuscate_bytecode(
             );
 
             // Apply transform with shared RNG
-            let transform_changed = match transform.apply(&mut cfg_ir, &mut shared_rng).await {
+            let transform_changed = match transform.apply(&mut cfg_ir, &mut shared_rng) {
                 Ok(changed) => {
                     tracing::debug!("    Result: changed={}", changed);
                     changed

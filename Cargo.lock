@@ -1169,7 +1169,6 @@ dependencies = [
 name = "azoth-cli"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "azoth-core",
  "azoth-transform",
@@ -1194,19 +1193,27 @@ dependencies = [
  "petgraph 0.8.2",
  "serde",
  "sha3",
- "tempfile",
  "thiserror 2.0.12",
  "tiny-keccak",
- "tokio",
  "tracing",
- "tracing-subscriber",
+]
+
+[[package]]
+name = "azoth-examples"
+version = "0.1.0"
+dependencies = [
+ "azoth-core",
+ "azoth-transform",
+ "chrono",
+ "hex",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
 name = "azoth-transform"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "azoth-analysis",
  "azoth-core",
  "azoth-utils",
@@ -4029,18 +4036,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mirage-workflow"
-version = "0.1.0"
-dependencies = [
- "azoth-core",
- "azoth-transform",
- "chrono",
- "hex",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "native-tls"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6102,6 +6097,28 @@ dependencies = [
  "dirs-next",
  "rustversion",
  "winapi",
+]
+
+[[package]]
+name = "tests"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "azoth-analysis",
+ "azoth-core",
+ "azoth-transform",
+ "azoth-utils",
+ "azoth-verification",
+ "heimdall-disassembler",
+ "hex",
+ "petgraph 0.8.2",
+ "rand 0.9.1",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
