@@ -285,14 +285,14 @@ pub async fn extract_semantics_from_bytecode(
         bytecode.len()
     );
 
-    let (instructions, info, _) =
+    let (instructions, _, _) =
         decoder::decode_bytecode(&format!("0x{}", hex::encode(bytecode)), false)
             .await
             .map_err(|e| {
                 VerificationError::BytecodeAnalysis(format!("Failed to decode bytecode: {e}"))
             })?;
 
-    let sections = detection::locate_sections(bytecode, &instructions, &info).map_err(|e| {
+    let sections = detection::locate_sections(bytecode, &instructions).map_err(|e| {
         VerificationError::BytecodeAnalysis(format!("Failed to detect sections: {e}"))
     })?;
 

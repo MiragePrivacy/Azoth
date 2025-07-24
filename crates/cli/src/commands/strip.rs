@@ -28,8 +28,8 @@ impl super::Command for StripArgs {
     async fn execute(self) -> Result<(), Box<dyn Error>> {
         let is_file = !self.input.starts_with("0x") && Path::new(&self.input).is_file();
         let bytes = input_to_bytes(&self.input, is_file)?;
-        let (instructions, info, _) = decode_bytecode(&self.input, is_file).await?;
-        let sections = locate_sections(&bytes, &instructions, &info)?;
+        let (instructions, _, _) = decode_bytecode(&self.input, is_file).await?;
+        let sections = locate_sections(&bytes, &instructions)?;
         let (clean_runtime, report) = strip_bytecode(&bytes, &sections)?;
 
         if self.raw {

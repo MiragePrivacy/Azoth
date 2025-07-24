@@ -10,12 +10,12 @@ use crate::Opcode;
 ///
 /// # Usage
 /// ```rust,ignore
-/// let (instructions, info, _) = decoder::decode_bytecode("0x60016002", false).await.unwrap();
+/// let (instructions, _, _) = decoder::decode_bytecode("0x60016002", false).await.unwrap();
 /// let sections =
-///     locate_sections(&hex::decode("60016002").unwrap(), &instructions, &info).unwrap();
+///     locate_sections(&hex::decode("60016002").unwrap(), &instructions).unwrap();
 /// assert!(!sections.is_empty());
 /// ```
-use crate::decoder::{DecodeInfo, Instruction};
+use crate::decoder::Instruction;
 use crate::is_terminal_opcode;
 use azoth_utils::errors::DetectError;
 use serde::{Deserialize, Serialize};
@@ -100,7 +100,6 @@ impl Section {
 pub fn locate_sections(
     bytes: &[u8],
     instructions: &[Instruction],
-    _info: &DecodeInfo,
 ) -> Result<Vec<Section>, DetectError> {
     let mut sections = Vec::new();
     let total_len = bytes.len();
@@ -194,15 +193,13 @@ pub fn locate_sections(
     }
 
     // Only push Padding if ConstructorArgs is not present
-    if !has_constructor_args {
-        if let Some((pad_offset, pad_len)) = padding {
-            tracing::debug!("Padding detected: offset={}, len={}", pad_offset, pad_len);
-            sections.push(Section {
-                kind: SectionKind::Padding,
-                offset: pad_offset,
-                len: pad_len,
-            });
-        }
+    if !has_constructor_args && let Some((pad_offset, pad_len)) = padding {
+        tracing::debug!("Padding detected: offset={}, len={}", pad_offset, pad_len);
+        sections.push(Section {
+            kind: SectionKind::Padding,
+            offset: pad_offset,
+            len: pad_len,
+        });
     }
 
     // Pass E: Create sections based on detected boundaries
@@ -883,10 +880,3 @@ fn parse_selector_check(instrs: &[Instruction]) -> Option<(u32, u64)> {
 pub fn has_dispatcher(instructions: &[Instruction]) -> bool {
     detect_function_dispatcher(instructions).is_some()
 }
-
-// todo(g4titanx): turn the unit-test into a property test instead of checking hard-coded offsets.
-// the idea is that we let `locate_sections` do its job and then we verify intrinsic invariants that
-// must always hold, regardless of any particular byte indices. that way the test automatically
-// adapts to any fixture we feed it, and we never need to update constants when the fixture changes
-#[cfg(test)]
-mod tests {}

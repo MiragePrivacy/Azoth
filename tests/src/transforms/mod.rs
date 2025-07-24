@@ -1,8 +1,8 @@
-#[allow(unused_imports)]
+#[cfg(test)]
 mod function_dispatcher;
-#[allow(unused_imports)]
+#[cfg(test)]
 mod jump_address;
-#[allow(unused_imports)]
+#[cfg(test)]
 mod opaque_predicate;
-#[allow(unused_imports)]
+#[cfg(test)]
 mod shuffle;

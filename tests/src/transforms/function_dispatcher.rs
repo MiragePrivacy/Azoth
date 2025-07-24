@@ -1,7 +1,7 @@
 use azoth_core::cfg_ir::Block;
 use azoth_core::decoder::Instruction;
 use azoth_core::detection::FunctionSelector;
-use azoth_core::{cfg_ir, decoder, detection, strip, Opcode};
+use azoth_core::{decoder, detection, process_bytecode_to_cfg_only, Opcode};
 use azoth_transform::function_dispatcher::{DispatcherPattern, FunctionDispatcher};
 use azoth_transform::obfuscator::obfuscate_bytecode;
 use azoth_transform::obfuscator::ObfuscationConfig;
@@ -184,11 +184,7 @@ async fn test_pc_integrity_integration() {
 
     // Create a simple bytecode with a dispatcher-like pattern
     let bytecode = "0x6000356020527f63c29855780817ffffffffffffffffffffffffffffffff5b";
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
-    let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
-    let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-    let mut cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report).unwrap();
+    let mut cfg_ir = process_bytecode_to_cfg_only(bytecode, false).await.unwrap();
 
     // Get original PC count
     let _original_total_size = cfg_ir

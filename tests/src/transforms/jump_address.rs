@@ -1,4 +1,3 @@
-use azoth_core::{cfg_ir, decoder, detection, strip};
 use azoth_transform::jump_address_transformer::JumpAddressTransformer;
 use azoth_transform::{PassConfig, Transform};
 use rand::rngs::StdRng;
@@ -12,11 +11,9 @@ async fn test_jump_address_transformer() {
 
     // Simple bytecode with a conditional jump
     let bytecode = "0x60085760015b00"; // PUSH1 0x08, JUMPI, PUSH1 0x01, JUMPDEST, STOP
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
-    let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
-    let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-    let mut cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report).unwrap();
+    let mut cfg_ir = azoth_core::process_bytecode_to_cfg_only(bytecode, false)
+        .await
+        .unwrap();
 
     // Count instructions before transformation
     let mut instruction_count_before = 0;

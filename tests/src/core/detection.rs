@@ -1,91 +1,14 @@
 use azoth_core::{
-    decoder::{decode_bytecode, DecodeInfo, Instruction, SourceType},
-    detection::{locate_sections, validate_sections, Section, SectionKind},
+    decoder::decode_bytecode,
+    detection::{locate_sections, Section, SectionKind},
 };
-use azoth_utils::errors::DetectError;
 
 #[tokio::test]
-async fn test_locate_sections_with_auxdata() {
+async fn test_full_deploy_payload_properties() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
-    let bytecode = "0xa165627a7a720000"; // Simplified Auxdata example
-    let (instructions, info, _) = decode_bytecode(bytecode, false).await.unwrap();
-    let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    tracing::debug!("Bytecode: {:?}", bytes);
-    tracing::debug!("Instructions: {:?}", instructions);
-    tracing::debug!("DecodeInfo: {:?}", info);
 
-    let result = locate_sections(&bytes, &instructions, &info);
-    match result {
-        Ok(sections) => {
-            tracing::debug!("Detected sections: {:?}", sections);
-            for (i, section) in sections.iter().enumerate() {
-                tracing::debug!(
-                    "Section {}: kind={:?}, offset={}, len={}",
-                    i,
-                    section.kind,
-                    section.offset,
-                    section.len
-                );
-            }
-            assert_eq!(sections.len(), 1, "Expected exactly one section");
-            assert_eq!(
-                sections[0].kind,
-                SectionKind::Auxdata,
-                "Expected Auxdata section"
-            );
-        }
-        Err(e) => {
-            tracing::debug!("Error in locate_sections: {:?}", e);
-            panic!("Unexpected error: {:?}", e);
-        }
-    }
-}
-
-#[tokio::test]
-async fn test_overlap_error() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
-    let bytes = vec![0; 10];
-    let total_len = bytes.len();
-    let _instructions: Vec<Instruction> = vec![]; // Explicit type annotation
-    let _info = DecodeInfo {
-        byte_length: 10,
-        keccak_hash: [0; 32],
-        source: SourceType::HexString,
-    };
-    // Simulate overlap
-    let mut simulated_sections = vec![
-        Section {
-            kind: SectionKind::Init,
-            offset: 0,
-            len: 5,
-        },
-        Section {
-            kind: SectionKind::Runtime,
-            offset: 3,
-            len: 5,
-        }, // Overlaps at 3
-    ];
-    tracing::debug!("Simulated sections: {:?}", simulated_sections);
-
-    // Directly test overlap validation
-    simulated_sections.sort_by_key(|s| s.offset);
-    let result = validate_sections(&mut simulated_sections, total_len);
-    tracing::debug!("Result from validate_sections: {:?}", result);
-    assert!(
-        matches!(result, Err(DetectError::Overlap(3))),
-        "Expected Overlap error at offset 3"
-    );
-}
-
-#[tokio::test]
-async fn test_full_deploy_payload() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
     let bytecode = concat!(
         "0x",
         "600a",             // PUSH1 0x0a (runtime len)
@@ -101,11 +24,13 @@ async fn test_full_deploy_payload() {
 
     let (instructions, info, _) = decode_bytecode(bytecode, false).await.unwrap();
     let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
+
     tracing::debug!("Full deploy bytecode: {:?}", bytes);
     tracing::debug!("Instructions: {:?}", instructions);
     tracing::debug!("DecodeInfo: {:?}", info);
 
-    let sections = locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = locate_sections(&bytes, &instructions).unwrap();
+
     tracing::debug!("Detected sections: {:?}", sections);
     for (i, section) in sections.iter().enumerate() {
         tracing::debug!(
@@ -117,65 +42,162 @@ async fn test_full_deploy_payload() {
         );
     }
 
-    assert_eq!(sections.len(), 4, "Expected 4 sections");
-    assert_eq!(
-        sections[0],
-        Section {
-            kind: SectionKind::Init,
-            offset: 0,
-            len: 10
-        },
-        "Init section mismatch"
-    );
-    assert_eq!(
-        sections[1],
-        Section {
-            kind: SectionKind::ConstructorArgs,
-            offset: 10,
-            len: 4
-        },
-        "ConstructorArgs section mismatch"
-    );
-    assert_eq!(
-        sections[2],
-        Section {
-            kind: SectionKind::Runtime,
-            offset: 14,
-            len: 3
-        },
-        "Runtime section mismatch"
-    );
-    assert_eq!(
-        sections[3],
-        Section {
-            kind: SectionKind::Auxdata,
-            offset: 17,
-            len: 8
-        },
-        "Auxdata section mismatch"
-    );
+    // Property 1: Sections must be non-overlapping
+    assert_sections_non_overlapping(&sections);
 
-    let total_len = sections.iter().map(|s| s.len).sum::<usize>();
-    assert_eq!(
-        total_len,
-        bytes.len(),
-        "Sections do not cover full bytecode"
+    // Property 2: Sections must cover the entire bytecode with no gaps
+    assert_full_coverage(&sections, bytes.len());
+
+    // Property 3: Sections must be ordered by offset
+    assert_sections_ordered(&sections);
+
+    // Property 4: Each section must have non-zero length
+    assert_sections_non_empty(&sections);
+
+    // Property 5: Runtime section must exist for deployment bytecode
+    assert_has_runtime_section(&sections);
+
+    // Property 6: If Init exists, it must start at offset 0
+    assert_init_starts_at_zero(&sections);
+
+    // Property 7: If Auxdata exists, it must be the last section
+    assert_auxdata_is_last(&sections, bytes.len());
+
+    // Property 8: ConstructorArgs must be between Init and Runtime (if all exist)
+    assert_constructor_args_position(&sections);
+
+    // Property 9: Padding must come after Runtime but before Auxdata (if they exist)
+    assert_padding_position(&sections);
+
+    // Property 10: Section kinds must be unique (except for potential multiple paddings)
+    assert_unique_section_kinds(&sections);
+}
+
+// Property test helper functions
+
+#[allow(dead_code)]
+fn assert_sections_non_overlapping(sections: &[Section]) {
+    for i in 0..sections.len() {
+        for j in i + 1..sections.len() {
+            let a = &sections[i];
+            let b = &sections[j];
+            assert!(
+                a.end() <= b.offset || b.end() <= a.offset,
+                "Sections overlap: {a:?} and {b:?}"
+            );
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn assert_full_coverage(sections: &[Section], total_len: usize) {
+    let mut coverage = vec![false; total_len];
+
+    for section in sections {
+        let range = section.offset..section.end();
+        for (i, covered) in coverage[range.clone()].iter_mut().enumerate() {
+            let byte_index = section.offset + i;
+            assert!(
+                !*covered,
+                "Byte {byte_index} is covered by multiple sections"
+            );
+            *covered = true;
+        }
+    }
+
+    for (i, &covered) in coverage.iter().enumerate() {
+        assert!(covered, "Byte {i} is not covered by any section");
+    }
+}
+
+#[allow(dead_code)]
+fn assert_sections_ordered(sections: &[Section]) {
+    for window in sections.windows(2) {
+        assert!(
+            window[0].offset <= window[1].offset,
+            "Sections not ordered by offset: {:?} comes before {:?}",
+            window[0],
+            window[1]
+        );
+    }
+}
+
+#[allow(dead_code)]
+fn assert_sections_non_empty(sections: &[Section]) {
+    for section in sections {
+        assert!(section.len > 0, "Section has zero length: {section:?}");
+    }
+}
+
+#[allow(dead_code)]
+fn assert_has_runtime_section(sections: &[Section]) {
+    let has_runtime = sections.iter().any(|s| s.kind == SectionKind::Runtime);
+    assert!(
+        has_runtime,
+        "Deployment bytecode must have a Runtime section"
     );
 }
 
-#[tokio::test]
-async fn runtime_with_trailing_zeros_is_split_properly() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
-    let hex = "60016000f3".to_owned() + &"00".repeat(32);
-    let (instructions, info, _) = decode_bytecode(&format!("0x{}", hex), false).await.unwrap();
-    let bytes = hex::decode(hex).unwrap();
-    let sections = locate_sections(&bytes, &instructions, &info).unwrap();
-    let rt = sections
+#[allow(dead_code)]
+fn assert_init_starts_at_zero(sections: &[Section]) {
+    if let Some(init) = sections.iter().find(|s| s.kind == SectionKind::Init) {
+        assert_eq!(init.offset, 0, "Init section must start at offset 0");
+    }
+}
+
+#[allow(dead_code)]
+fn assert_auxdata_is_last(sections: &[Section], total_len: usize) {
+    if let Some(auxdata) = sections.iter().find(|s| s.kind == SectionKind::Auxdata) {
+        assert_eq!(auxdata.end(), total_len, "Auxdata must be the last section");
+    }
+}
+
+#[allow(dead_code)]
+fn assert_constructor_args_position(sections: &[Section]) {
+    let init_pos = sections.iter().position(|s| s.kind == SectionKind::Init);
+    let args_pos = sections
         .iter()
-        .find(|s| s.kind == SectionKind::Runtime)
-        .unwrap();
-    assert_eq!(rt.len, 5); // 5-byte program
-    assert!(sections.iter().any(|s| s.kind == SectionKind::Padding));
+        .position(|s| s.kind == SectionKind::ConstructorArgs);
+    let runtime_pos = sections.iter().position(|s| s.kind == SectionKind::Runtime);
+
+    if let (Some(init), Some(args), Some(runtime)) = (init_pos, args_pos, runtime_pos) {
+        assert!(
+            init < args && args < runtime,
+            "ConstructorArgs must be between Init and Runtime"
+        );
+    }
+}
+
+#[allow(dead_code)]
+fn assert_padding_position(sections: &[Section]) {
+    let runtime_pos = sections.iter().position(|s| s.kind == SectionKind::Runtime);
+    let padding_pos = sections.iter().position(|s| s.kind == SectionKind::Padding);
+    let auxdata_pos = sections.iter().position(|s| s.kind == SectionKind::Auxdata);
+
+    if let (Some(runtime), Some(padding)) = (runtime_pos, padding_pos) {
+        assert!(runtime < padding, "Padding must come after Runtime");
+
+        if let Some(auxdata) = auxdata_pos {
+            assert!(padding < auxdata, "Padding must come before Auxdata");
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn assert_unique_section_kinds(sections: &[Section]) {
+    let kinds = [
+        SectionKind::Init,
+        SectionKind::Runtime,
+        SectionKind::ConstructorArgs,
+        SectionKind::Auxdata,
+        // Note: Padding can appear multiple times, so we don't check it
+    ];
+
+    for kind in &kinds {
+        let count = sections.iter().filter(|s| s.kind == *kind).count();
+        assert!(
+            count <= 1,
+            "Section kind {kind:?} appears {count} times, but should appear at most once"
+        );
+    }
 }

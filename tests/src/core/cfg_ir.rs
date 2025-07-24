@@ -7,9 +7,9 @@ async fn test_build_cfg_ir_simple() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let bytecode = "0x600160015601"; // PUSH1 0x01, PUSH1 0x01, ADD
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
     let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
 
     let cfg_ir =
@@ -24,9 +24,9 @@ async fn test_build_cfg_ir_straight_line() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let bytecode = "0x600050"; // PUSH1 0x00, STOP
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
     let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
 
     let cfg_ir =
@@ -41,9 +41,9 @@ async fn test_build_cfg_ir_diamond() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let bytecode = "0x6000600157600256"; // PUSH1 0x00, JUMPI, JUMPDEST, STOP
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
     let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
 
     let cfg_ir =
@@ -58,9 +58,9 @@ async fn test_build_cfg_ir_loop() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let bytecode = "0x60005b6000"; // PUSH1 0x00, JUMPDEST, PUSH1 0x00
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
     let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
 
     let cfg_ir =
@@ -75,9 +75,9 @@ async fn test_build_cfg_ir_malformed() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let bytecode = "0x6001"; // PUSH1 0x01, no terminal
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
     let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
 
     let cfg_ir =

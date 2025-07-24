@@ -8,11 +8,7 @@
 ///
 /// # Usage
 /// ```rust,ignore
-/// let (instructions, info, _) = decoder::decode_bytecode("0x600160015601", false).await.unwrap();
-/// let bytes = hex::decode("600160015601").unwrap();
-/// let &sections = detection::locate_&sections(&bytes, &instructions, &info).unwrap();
-/// let (clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-/// let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes).unwrap();
+/// let (cfg_ir, _, _, _) = azoth_core::process_bytecode_to_cfg("0x600160015601", false).await.unwrap();
 /// let metrics = metrics::collect_metrics(&cfg_ir, &report).unwrap();
 /// println!("{}", serde_json::to_string_pretty(&metrics).unwrap());
 /// ```
@@ -219,4 +215,3 @@ fn score(overlap: f64, nodes: usize, edges: usize) -> f64 {
 pub fn compare(before: &Metrics, after: &Metrics) -> f64 {
     after.potency - before.potency - 0.25 * (after.byte_len as f64 - before.byte_len as f64)
 }
-

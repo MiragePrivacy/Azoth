@@ -1,10 +1,10 @@
-#[allow(unused_imports)]
+#[cfg(test)]
 mod cfg_ir;
-#[allow(unused_imports)]
+#[cfg(test)]
 mod decoder;
-#[allow(unused_imports)]
+#[cfg(test)]
 mod detection;
-#[allow(unused_imports)]
+#[cfg(test)]
 mod encoder;
-#[allow(unused_imports)]
+#[cfg(test)]
 mod strip;

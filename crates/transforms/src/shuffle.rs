@@ -133,9 +133,9 @@ mod tests {
             .with_max_level(tracing::Level::DEBUG)
             .init();
         let bytecode = "0x60015b6002"; // PUSH1 0x01, JUMPDEST, PUSH1 0x02
-        let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+        let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
         let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+        let sections = detection::locate_sections(&bytes, &instructions).unwrap();
         let (_, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
         let mut cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report).unwrap();
 

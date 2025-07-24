@@ -1,4 +1,5 @@
 //! azoth's single entry-point for turning byte-sequences into Heimdall instruction streams.
+
 use azoth_utils::errors::DecodeError;
 use heimdall::{DisassemblerArgsBuilder, disassemble};
 use hex::FromHex;

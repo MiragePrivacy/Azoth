@@ -13,9 +13,9 @@ async fn test_collect_metrics_simple() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let bytecode = "0x600160015601"; // PUSH1 0x01, PUSH1 0x01, ADD
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
     let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
     let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
 
@@ -40,9 +40,9 @@ async fn test_collect_metrics_single_block() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let bytecode = "0x600050"; // PUSH1 0x00, STOP
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
     let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
     let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
 
@@ -64,9 +64,9 @@ async fn test_collect_metrics_branching() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let bytecode = "0x6000600157600256"; // PUSH1 0x00, JUMPI, JUMPDEST, STOP
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
     let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
     let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
 
@@ -103,9 +103,9 @@ async fn test_collect_metrics_no_body_blocks() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let bytecode = "0x00"; // STOP
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
     let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
     let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
 
@@ -120,21 +120,21 @@ async fn test_compare_metrics() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let bytecode_before = "0x600050"; // PUSH1 0x00, STOP
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode_before, false)
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode_before, false)
         .await
         .unwrap();
     let bytes = hex::decode(bytecode_before.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
     let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
     let metrics_before = collect_metrics(&cfg_ir, &report).unwrap();
 
     let bytecode_after = "0x600160015601"; // PUSH1 0x01, PUSH1 0x01, ADD
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode_after, false)
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode_after, false)
         .await
         .unwrap();
     let bytes = hex::decode(bytecode_after.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
     let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
     let metrics_after = collect_metrics(&cfg_ir, &report).unwrap();
@@ -150,21 +150,21 @@ async fn test_potency_edge_increase() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let bytecode_simple = "0x600050"; // PUSH1 0x00, STOP
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode_simple, false)
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode_simple, false)
         .await
         .unwrap();
     let bytes = hex::decode(bytecode_simple.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
     let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
     let metrics_simple = collect_metrics(&cfg_ir, &report).unwrap();
 
     let bytecode_complex = "0x6000600157600256"; // PUSH1 0x00, JUMPI, JUMPDEST, STOP
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode_complex, false)
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode_complex, false)
         .await
         .unwrap();
     let bytes = hex::decode(bytecode_complex.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
+    let sections = detection::locate_sections(&bytes, &instructions).unwrap();
     let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
     let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
     let metrics_complex = collect_metrics(&cfg_ir, &report).unwrap();
@@ -182,11 +182,9 @@ async fn test_dominator_computation() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     let bytecode = "0x6000600157600256"; // PUSH1 0x00, PUSH1 0x01, JUMPI, PUSH1 0x02, JUMP
-    let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
-    let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-    let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
-    let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-    let cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report.clone()).unwrap();
+    let cfg_ir = azoth_core::process_bytecode_to_cfg_only(bytecode, false)
+        .await
+        .unwrap();
 
     let (doms, post_doms) = dominator_pairs(&cfg_ir.cfg);
     let overlap = dom_overlap(&doms, &post_doms);
@@ -228,7 +226,7 @@ async fn test_dominator_computation() {
     );
 
     // Verify metrics integration
-    let metrics = collect_metrics(&cfg_ir, &report).unwrap();
+    let metrics = collect_metrics(&cfg_ir, &cfg_ir.clean_report).unwrap();
     assert_eq!(
         metrics.dom_overlap, overlap,
         "Metrics overlap should match computed overlap"

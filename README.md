@@ -10,13 +10,7 @@ This naming reflects our core philosophy: "dissect first, disguise later". Azoth
 
 ## Current Status
 
-Azoth is currently in active development and testing as we prepare for production deployment. The core infrastructure is complete and functional, including comprehensive EVM bytecode parsing, section detection, control flow graph generation with SSA-form intermediate representation, and full instruction decoding with semantic analysis. The bytecode stripping functionality successfully isolates runtime code from constructor and auxiliary data.
-
-The obfuscation transform system is operational with several key passes implemented. Opaque predicates inject always-true or always-false conditions to confuse static analysis. Control flow shuffling reorders basic blocks while preserving semantics. Jump address transformation modifies jump targets to obscure control flow patterns. Stack noise injection adds semantically neutral stack operations that complicate reverse engineering without affecting execution.
-
-Our analysis and metrics system tracks i) potency through structural and statistical complexity measurement, ii) resilience via resistance to automated decompilation scoring, and iii) cost through gas overhead and bytecode size impact analysis. The dominance analysis component constructs control flow dominance trees for advanced program analysis.
-
-The CLI interface provides comprehensive tooling with deterministic compilation support, enabling reproducible builds from seed values. The pass management system offers configurable transform pipelines with threshold-based acceptance criteria.
+Azoth is currently in active development and testing as we prepare for production deployment. The core infrastructure is operational, including comprehensive EVM bytecode parsing, section detection, control flow graph generation with SSA-form intermediate representation, and full instruction decoding with semantic analysis. The bytecode stripping functionality successfully isolates runtime code from constructor and auxiliary data.
 
 Currently under active development are formal verification components that will provide mathematical proofs of semantic equivalence, enhanced complexity and obfuscation quality measures, and additional transforms including function dispatcher obfuscation and advanced data flow obfuscation techniques. These components are being rigorously tested before production release.
 
@@ -39,49 +33,9 @@ Every transform must raise Potency and Resilience above clearly defined threshol
 ## Formal Verification System
 Azoth incorporates a formal verification system that provides mathematical guarantees of functional and semantic equivalence between original and obfuscated contracts. This addresses the critical challenge that traditional testing can only verify specific cases, while smart contracts must handle infinite input combinations.
 
-## Usage Guide
+## Getting Started
 
-Azoth provides a comprehensive CLI tool for local development, testing, and experimentation with bytecode obfuscation. This CLI interface allows developers to analyze, strip, visualize, and obfuscate EVM bytecode during the development process.
-
-### CLI Tool Installation
-
-The CLI tool is included for local testing and development purposes:
-
-```bash
-# Build the development CLI
-cargo build --release
-
-# The CLI binary will be available at target/release/azoth
-# Or install it locally
-cargo install --path crates/cli
-```
-
-### Basic CLI Usage
-
-The CLI provides four main commands for bytecode analysis and obfuscation:
-
-```bash
-# Decode bytecode to annotated assembly
-azoth decode "0x608060405234801561001057600080fd5b50..."
-
-# Strip and analyze bytecode sections  
-azoth strip bytecode.hex
-
-# Generate control flow graph visualization
-azoth cfg -o analysis.dot bytecode.hex
-
-# Apply obfuscation transforms
-azoth obfuscate --seed 12345 --passes "shuffle,jump_transform,opaque_pred" bytecode.hex
-```
-
-For detailed CLI documentation, command options, and usage examples, run:
-
-```bash
-azoth --help
-azoth <command> --help
-```
-
-The CLI tool accepts various input formats (hex strings, .hex files, binary files) and provides comprehensive output options including JSON reports, Graphviz visualizations, and detailed metrics analysis.
+Azoth is available through a [command-line interface](crates/cli). This could be used for local development, testing, and experimentation with bytecode obfuscation. This CLI interface allows developers to analyze, strip, visualize, and obfuscate EVM bytecode during the development process.
 
 ## Production Readiness
 
@@ -89,7 +43,7 @@ Azoth is being prepared for production deployment with comprehensive testing of 
 
 ## Contributing
 
-Azoth welcomes contributions in new obfuscation transforms, improved metrics and analysis, performance optimizations, documentation improvements, and bug reports with fixes. See our contributing guidelines for detailed information.
+Azoth welcomes contributions in new obfuscation transforms, improved metrics and analysis, performance optimizations, documentation improvements, and bug reports with fixes. See our [contributing guidelines](CONTRIBUTING.md) for detailed information.
 
 ### Testing & Development
 
