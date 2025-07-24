@@ -204,28 +204,30 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
         );
 
         // 1. Split before a JUMPDEST only if current block is non-empty
-        if instr.opcode == "JUMPDEST"
-            && let Block::Body {
+        if instr.opcode == "JUMPDEST" {
+            if let Block::Body {
                 instructions,
                 start_pc,
                 ..
             } = &cur_block
-            && !instructions.is_empty()
-        {
-            tracing::debug!(
-                "Splitting before JUMPDEST at pc={}: pushing block with start_pc={}, instructions={:?}",
-                instr.pc,
-                start_pc,
-                instructions.iter().map(|i| &i.opcode).collect::<Vec<_>>()
-            );
-            blocks.push(std::mem::replace(
-                &mut cur_block,
-                Block::Body {
-                    start_pc: instr.pc,
-                    instructions: Vec::new(),
-                    max_stack: 0,
-                },
-            ));
+            {
+                if !instructions.is_empty() {
+                    tracing::debug!(
+                        "Splitting before JUMPDEST at pc={}: pushing block with start_pc={}, instructions={:?}",
+                        instr.pc,
+                        start_pc,
+                        instructions.iter().map(|i| &i.opcode).collect::<Vec<_>>()
+                    );
+                    blocks.push(std::mem::replace(
+                        &mut cur_block,
+                        Block::Body {
+                            start_pc: instr.pc,
+                            instructions: Vec::new(),
+                            max_stack: 0,
+                        },
+                    ));
+                }
+            }
         }
 
         // 2. Record the opcode
@@ -372,10 +374,10 @@ fn build_edges(
     }
 
     // Add edge from Entry to first block, collapsing if let
-    if let Some(Block::Body { start_pc, .. }) = blocks.first()
-        && let Some(&target) = node_map.get(start_pc)
-    {
-        edges.push((NodeIndex::new(0), target, EdgeType::Fallthrough));
+    if let Some(Block::Body { start_pc, .. }) = blocks.first() {
+        if let Some(&target) = node_map.get(start_pc) {
+            edges.push((NodeIndex::new(0), target, EdgeType::Fallthrough));
+        }
     }
 
     // Build edges with translation through node_map
@@ -407,29 +409,32 @@ fn build_edges(
             let last_instr = last_instr.unwrap();
             match last_instr.opcode.as_str() {
                 "JUMP" => {
-                    if let Some(imm) = &last_instr.imm
-                        && let Ok(target_pc) = usize::from_str_radix(imm, 16)
-                        && let Some(&target) = node_map.get(&target_pc)
-                    {
-                        edges.push((start_idx, target, EdgeType::Jump));
+                    if let Some(imm) = &last_instr.imm {
+                        if let Ok(target_pc) = usize::from_str_radix(imm, 16) {
+                            if let Some(&target) = node_map.get(&target_pc) {
+                                edges.push((start_idx, target, EdgeType::Jump));
+                            }
+                        }
                     }
                     // Skip fall-through for unconditional jump
                     continue;
                 }
                 "JUMPI" => {
-                    if let Some(imm) = &last_instr.imm
-                        && let Ok(target_pc) = usize::from_str_radix(imm, 16)
-                        && let Some(&target) = node_map.get(&target_pc)
-                    {
-                        edges.push((start_idx, target, EdgeType::BranchTrue));
+                    if let Some(imm) = &last_instr.imm {
+                        if let Ok(target_pc) = usize::from_str_radix(imm, 16) {
+                            if let Some(&target) = node_map.get(&target_pc) {
+                                edges.push((start_idx, target, EdgeType::BranchTrue));
+                            }
+                        }
                     }
-                    if i + 1 < blocks.len()
-                        && let Block::Body {
+                    if i + 1 < blocks.len() {
+                        if let Block::Body {
                             start_pc: next_pc, ..
                         } = &blocks[i + 1]
-                    {
-                        let next_idx = node_map[next_pc];
-                        edges.push((start_idx, next_idx, EdgeType::BranchFalse));
+                        {
+                            let next_idx = node_map[next_pc];
+                            edges.push((start_idx, next_idx, EdgeType::BranchFalse));
+                        }
                     }
                 }
                 _ if is_terminal_opcode(&last_instr.opcode) => {

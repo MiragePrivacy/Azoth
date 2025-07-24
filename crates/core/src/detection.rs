@@ -193,13 +193,15 @@ pub fn locate_sections(
     }
 
     // Only push Padding if ConstructorArgs is not present
-    if !has_constructor_args && let Some((pad_offset, pad_len)) = padding {
-        tracing::debug!("Padding detected: offset={}, len={}", pad_offset, pad_len);
-        sections.push(Section {
-            kind: SectionKind::Padding,
-            offset: pad_offset,
-            len: pad_len,
-        });
+    if !has_constructor_args {
+        if let Some((pad_offset, pad_len)) = padding {
+            tracing::debug!("Padding detected: offset={}, len={}", pad_offset, pad_len);
+            sections.push(Section {
+                kind: SectionKind::Padding,
+                offset: pad_offset,
+                len: pad_len,
+            });
+        }
     }
 
     // Pass E: Create sections based on detected boundaries
