@@ -19,7 +19,7 @@ Reorders basic blocks within the CFG while updating jump targets to maintain cor
 
 Example
 
-```
+```assembly
 Original -> 0x60015b6002
 Shuffled -> 0x5b60026001
 ```
@@ -122,7 +122,7 @@ STOP
 ```
 
 Obfuscated dispatcher:
-```
+```assembly
 PUSH1 0x00
 CALLDATALOAD
 PUSH1 0xE0

@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-azoth-core = { path = "../core" }
-azoth-utils = { path = "../utils" }
+azoth-core.workspace = true
+azoth-utils.workspace = true
 petgraph.workspace = true
 serde.workspace = true
 tokio.workspace = true

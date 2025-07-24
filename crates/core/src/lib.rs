@@ -27,3 +27,88 @@ pub fn is_block_ending_opcode(opcode: &str) -> bool {
         "STOP" | "RETURN" | "REVERT" | "SELFDESTRUCT" | "INVALID" | "JUMP" | "JUMPI"
     )
 }
+
+/// High-level convenience function to process raw bytecode into a CFG-IR bundle.
+///
+/// This function handles the complete pipeline from raw bytecode to CFG-IR, performing
+/// all necessary preprocessing steps that `cfg_ir::build_cfg_ir` expects to be done already.
+///
+/// # Difference from `cfg_ir::build_cfg_ir`
+/// - `cfg_ir::build_cfg_ir` is a low-level function that expects pre-processed inputs
+///   (decoded instructions, detected sections, strip report)
+/// - This function is a high-level wrapper that handles all preprocessing:
+///   1. Decodes the bytecode into instructions
+///   2. Detects sections (Init, Runtime, ConstructorArgs, etc.)
+///   3. Strips non-runtime sections
+///   4. Builds the CFG-IR
+///
+/// # Arguments
+/// * `bytecode` - Hex-encoded bytecode string (with or without "0x" prefix)
+/// * `is_file` - Flag indicating if the input is a file path (false for hex string).
+///
+/// # Returns
+/// A tuple containing:
+/// * The built CFG-IR bundle
+/// * The decoded instructions
+/// * The detected sections
+/// * The raw bytes
+///
+/// # Example
+/// ```rust,ignore
+/// // Instead of doing this manually:
+/// let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await?;
+/// let bytes = hex::decode(bytecode.trim_start_matches("0x"))?;
+/// let sections = detection::locate_sections(&bytes, &instructions)?;
+/// let (_, report) = strip::strip_bytecode(&bytes, &sections)?;
+/// let cfg_bundle = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report)?;
+///
+/// // You can simply do:
+/// let (cfg_bundle, instructions, sections, bytes) =
+///     process_bytecode_to_cfg(bytecode, false).await?;
+/// ```
+pub async fn process_bytecode_to_cfg(
+    bytecode: &str,
+    is_file: bool,
+) -> Result<
+    (
+        cfg_ir::CfgIrBundle,
+        Vec<decoder::Instruction>,
+        Vec<detection::Section>,
+        Vec<u8>,
+    ),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    // Decode bytecode
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode, is_file).await?;
+
+    // Convert to bytes
+    let bytes = hex::decode(bytecode.trim_start_matches("0x"))?;
+
+    // Detect sections
+    let sections = detection::locate_sections(&bytes, &instructions)?;
+
+    // Strip non-runtime sections
+    let (_, report) = strip::strip_bytecode(&bytes, &sections)?;
+
+    // Build CFG-IR (using the low-level function with pre-processed inputs)
+    let cfg_bundle = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report)?;
+
+    Ok((cfg_bundle, instructions, sections, bytes))
+}
+
+/// High-level convenience function that processes bytecode and returns only the CFG-IR bundle.
+///
+/// This is a simplified version of `process_bytecode_to_cfg` for cases where you don't
+/// need access to the intermediate results (instructions, sections, bytes).
+///
+/// # Example
+/// ```rust,ignore
+/// let mut cfg_bundle = process_bytecode_to_cfg_only("0x6001600260016003", false).await?;
+/// ```
+pub async fn process_bytecode_to_cfg_only(
+    bytecode: &str,
+    is_file: bool,
+) -> Result<cfg_ir::CfgIrBundle, Box<dyn std::error::Error + Send + Sync>> {
+    let (cfg_bundle, _, _, _) = process_bytecode_to_cfg(bytecode, is_file).await?;
+    Ok(cfg_bundle)
+}

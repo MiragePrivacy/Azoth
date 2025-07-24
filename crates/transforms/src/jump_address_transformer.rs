@@ -1,5 +1,4 @@
 use crate::{PassConfig, Transform};
-use async_trait::async_trait;
 use azoth_core::cfg_ir::{Block, CfgIrBundle};
 use azoth_core::decoder::Instruction;
 use azoth_core::Opcode;
@@ -25,7 +24,7 @@ impl JumpAddressTransformer {
     }
 
     /// Finds PUSH + JUMP/JUMPI patterns and transforms them
-    fn find_jump_patterns(&self, instructions: &[Instruction]) -> Vec<usize> {
+    pub fn find_jump_patterns(&self, instructions: &[Instruction]) -> Vec<usize> {
         let mut patterns = Vec::new();
 
         for i in 0..instructions.len().saturating_sub(1) {
@@ -45,7 +44,7 @@ impl JumpAddressTransformer {
     }
 
     /// Splits a jump target into two values that add up to the original
-    fn split_jump_target(&self, target: u64, rng: &mut StdRng) -> (u64, u64) {
+    pub fn split_jump_target(&self, target: u64, rng: &mut StdRng) -> (u64, u64) {
         // Generate a random value less than the target
         let split_point = if target > 1 {
             rng.random_range(1..target)
@@ -60,7 +59,7 @@ impl JumpAddressTransformer {
     }
 
     /// Determines the appropriate PUSH opcode size for a value
-    fn get_push_opcode_for_value(&self, value: u64) -> String {
+    pub fn get_push_opcode_for_value(&self, value: u64) -> String {
         let bytes_needed = if value == 0 {
             1
         } else {
@@ -76,13 +75,12 @@ impl JumpAddressTransformer {
     }
 }
 
-#[async_trait]
 impl Transform for JumpAddressTransformer {
     fn name(&self) -> &'static str {
         "JumpAddressTransformer"
     }
 
-    async fn apply(&self, ir: &mut CfgIrBundle, rng: &mut StdRng) -> Result<bool, TransformError> {
+    fn apply(&self, ir: &mut CfgIrBundle, rng: &mut StdRng) -> Result<bool, TransformError> {
         let mut changed = false;
         let mut transformations = Vec::new();
 
@@ -225,99 +223,5 @@ impl Transform for JumpAddressTransformer {
         }
 
         Ok(changed)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use azoth_core::{cfg_ir, decoder, detection, strip};
-    use rand::SeedableRng;
-    use tokio;
-
-    #[tokio::test]
-    async fn test_jump_address_transformer() {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
-
-        // Simple bytecode with a conditional jump
-        let bytecode = "0x60085760015b00"; // PUSH1 0x08, JUMPI, PUSH1 0x01, JUMPDEST, STOP
-        let (instructions, info, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
-        let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
-        let sections = detection::locate_sections(&bytes, &instructions, &info).unwrap();
-        let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections).unwrap();
-        let mut cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report).unwrap();
-
-        // Count instructions before transformation
-        let mut instruction_count_before = 0;
-        for node_idx in cfg_ir.cfg.node_indices() {
-            if let azoth_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[node_idx] {
-                instruction_count_before += instructions.len();
-            }
-        }
-
-        let mut rng = StdRng::seed_from_u64(42);
-
-        // Use a config that allows the transformation
-        let config = PassConfig {
-            max_size_delta: 1.0, // Allow all jumps to be transformed
-            ..Default::default()
-        };
-        let transform = JumpAddressTransformer::new(config);
-
-        let changed = transform.apply(&mut cfg_ir, &mut rng).await.unwrap();
-        assert!(changed, "JumpAddressTransformer should modify bytecode");
-
-        // Count instructions after transformation
-        let mut instruction_count_after = 0;
-        for node_idx in cfg_ir.cfg.node_indices() {
-            if let azoth_core::cfg_ir::Block::Body { instructions, .. } = &cfg_ir.cfg[node_idx] {
-                instruction_count_after += instructions.len();
-            }
-        }
-
-        // Should have more instructions after transformation
-        assert!(
-            instruction_count_after > instruction_count_before,
-            "Instruction count should increase: before={}, after={}",
-            instruction_count_before,
-            instruction_count_after
-        );
-
-        // Verify we added exactly 2 more instructions (1 PUSH was replaced with 2 PUSH + 1 ADD = net +2)
-        assert_eq!(
-            instruction_count_after,
-            instruction_count_before + 2,
-            "Should add exactly 2 instructions"
-        );
-    }
-
-    #[test]
-    fn test_split_jump_target() {
-        let mut rng = StdRng::seed_from_u64(42);
-        let config = PassConfig::default();
-        let transformer = JumpAddressTransformer::new(config);
-
-        let target = 0x100;
-        let (part1, part2) = transformer.split_jump_target(target, &mut rng);
-
-        assert_eq!(
-            part1 + part2,
-            target,
-            "Split parts should sum to original target"
-        );
-        assert!(part1 < target, "First part should be less than target");
-        assert!(part1 > 0, "First part should be greater than 0");
-    }
-
-    #[test]
-    fn test_push_opcode_sizing() {
-        let config = PassConfig::default();
-        let transformer = JumpAddressTransformer::new(config);
-
-        assert_eq!(transformer.get_push_opcode_for_value(0x42), "PUSH1");
-        assert_eq!(transformer.get_push_opcode_for_value(0x1234), "PUSH2");
-        assert_eq!(transformer.get_push_opcode_for_value(0x123456), "PUSH3");
     }
 }

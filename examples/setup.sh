@@ -7,8 +7,8 @@ echo "=============================================="
 echo ""
 
 # Check if we're in the right location
-if [[ ! -f "../../Cargo.toml" ]]; then
-    echo "❌ Please run this script from: examples/mirage-workflow/"
+if [[ ! -f "../Cargo.toml" ]]; then
+    echo "❌ Please run this script from: examples/"
     echo "   Current directory: $(pwd)"
     exit 1
 fi
@@ -72,4 +72,4 @@ echo "   ✅ Rust workflow implementation"
 echo "   ✅ Gas analysis and integrity verification"
 echo ""
 echo "🚀 Run the demo:"
-echo "   cargo run --bin mirage-workflow"
+echo "   cargo run --bin azoth-examples"

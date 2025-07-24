@@ -1,6 +1,6 @@
 use crate::function_dispatcher::FunctionDispatcher;
 use crate::{PassConfig, Transform};
-use azoth_core::{cfg_ir, decoder, detection, encoder, strip};
+use azoth_core::{cfg_ir, decoder, detection, encoder, process_bytecode_to_cfg};
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -95,28 +95,28 @@ pub async fn obfuscate_bytecode(
     tracing::debug!("  Seed: 0x{:x}", config.seed);
     tracing::debug!("  User transforms: {}", config.transforms.len());
 
-    // Decode bytecode
+    // Process bytecode to CFG-IR using the helper
     let input = format!("0x{bytecode_hex}");
-    let (instructions, info, _) = decoder::decode_bytecode(&input, false).await?;
+    let (mut cfg_ir, instructions, sections, _) = process_bytecode_to_cfg(&input, false).await?;
 
     // Step 2: Analyze instructions for unknown opcodes
     let (total_instructions, unknown_count, unknown_types) = analyze_instructions(&instructions);
     tracing::debug!("  Total instructions: {}", total_instructions);
     tracing::debug!("  Unknown opcodes: {}", unknown_count);
 
-    // Step 3: Detect sections and strip
-    let sections = detection::locate_sections(&bytes, &instructions, &info)?;
+    // Log section info
     tracing::debug!(
         "  Detected sections: {:?}",
         sections.iter().map(|s| (s.kind, s.len)).collect::<Vec<_>>()
     );
-
-    let (_clean_runtime, report) = strip::strip_bytecode(&bytes, &sections)?;
-    tracing::debug!("  Clean runtime size: {} bytes", _clean_runtime.len());
-    tracing::debug!("  Bytes saved by stripping: {}", report.bytes_saved);
-
-    // Step 4: Build CFG-IR
-    let mut cfg_ir = cfg_ir::build_cfg_ir(&instructions, &sections, &bytes, report)?;
+    tracing::debug!(
+        "  Clean runtime size: {} bytes",
+        cfg_ir.clean_report.bytes_saved
+    );
+    tracing::debug!(
+        "  Bytes saved by stripping: {}",
+        cfg_ir.clean_report.bytes_saved
+    );
 
     // Track initial metrics
     let original_block_count = cfg_ir.cfg.node_count();
@@ -183,7 +183,7 @@ pub async fn obfuscate_bytecode(
             );
 
             // Apply transform with shared RNG
-            let transform_changed = match transform.apply(&mut cfg_ir, &mut shared_rng).await {
+            let transform_changed = match transform.apply(&mut cfg_ir, &mut shared_rng) {
                 Ok(changed) => {
                     tracing::debug!("    Result: changed={}", changed);
                     changed
@@ -419,15 +419,15 @@ pub fn print_obfuscation_analysis(result: &ObfuscationResult) {
     // Print success summary
     if result.unknown_opcodes_count > 0 {
         println!(
-            "✅ Obfuscation complete with {} unknown opcodes preserved",
+            "Obfuscation complete with {} unknown opcodes preserved",
             result.unknown_opcodes_count
         );
     } else {
-        println!("✅ Obfuscation complete");
+        println!("Obfuscation complete");
     }
 
     println!(
-        "📈 Size change: {} → {} bytes ({:+.1}%)",
+        "Size change: {} → {} bytes ({:+.1}%)",
         result.original_size, result.obfuscated_size, result.size_increase_percentage
     );
     println!();

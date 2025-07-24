@@ -1,5 +1,4 @@
 use crate::{PassConfig, Transform};
-use async_trait::async_trait;
 use azoth_analysis::{collect_metrics, compare};
 use azoth_core::cfg_ir::CfgIrBundle;
 use azoth_utils::errors::TransformError;
@@ -7,9 +6,8 @@ use rand::{rngs::StdRng, SeedableRng};
 use tracing::info;
 
 /// Trait for running a sequence of obfuscation transforms on a CFG IR.
-#[async_trait]
 pub trait Pass {
-    async fn run(
+    fn run(
         &self,
         ir: &mut CfgIrBundle,
         passes: &[Box<dyn Transform>],
@@ -21,9 +19,8 @@ pub trait Pass {
 /// Default implementation of the Pass trait.
 pub struct DefaultPass;
 
-#[async_trait]
 impl Pass for DefaultPass {
-    async fn run(
+    fn run(
         &self,
         ir: &mut CfgIrBundle,
         passes: &[Box<dyn Transform>],
@@ -36,7 +33,7 @@ impl Pass for DefaultPass {
             let before = collect_metrics(ir, &ir.clean_report)?;
             let mut snapshot = ir.clone();
 
-            let mutated = pass.apply(&mut snapshot, &mut rng).await?;
+            let mutated = pass.apply(&mut snapshot, &mut rng)?;
             if !mutated {
                 continue;
             }
@@ -61,11 +58,11 @@ impl Pass for DefaultPass {
 }
 
 /// Convenience function to run the default pass.
-pub async fn run(
+pub fn run(
     ir: &mut CfgIrBundle,
     passes: &[Box<dyn Transform>],
     cfg: &PassConfig,
     seed: u64,
 ) -> Result<(), TransformError> {
-    DefaultPass.run(ir, passes, cfg, seed).await
+    DefaultPass.run(ir, passes, cfg, seed)
 }
