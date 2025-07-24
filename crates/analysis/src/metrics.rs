@@ -8,7 +8,7 @@
 ///
 /// # Usage
 /// ```rust,ignore
-/// let (cfg_ir, _, _, _) = azoth_core::process_bytecode_to_cfg("0x600160015601", false).await.unwrap();
+/// let cfg_ir = azoth_core::process_bytecode_to_cfg_only("0x600160015601", false).await.unwrap();
 /// let metrics = metrics::collect_metrics(&cfg_ir, &report).unwrap();
 /// println!("{}", serde_json::to_string_pretty(&metrics).unwrap());
 /// ```

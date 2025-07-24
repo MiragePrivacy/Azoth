@@ -1,4 +1,5 @@
-# Example use of Azoth in Mirage Protocol
+# Azoth Examples
+An example use of Azoth in Mirage Protocol
 
 ## Quick start
 
