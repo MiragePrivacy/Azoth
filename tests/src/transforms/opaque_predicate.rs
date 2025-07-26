@@ -1,8 +1,7 @@
 use azoth_analysis::collect_metrics;
 use azoth_transform::opaque_predicate::OpaquePredicate;
 use azoth_transform::{PassConfig, Transform};
-use rand::rngs::StdRng;
-use rand::SeedableRng;
+use azoth_utils::seed::Seed;
 
 #[tokio::test]
 async fn test_opaque_predicate_adds_blocks() {
@@ -15,7 +14,9 @@ async fn test_opaque_predicate_adds_blocks() {
         .unwrap();
 
     let before = collect_metrics(&cfg_ir, &cfg_ir.clean_report).unwrap();
-    let mut rng = StdRng::seed_from_u64(42);
+    let seed = Seed::from_hex("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+        .unwrap();
+    let mut rng = seed.create_deterministic_rng();
     let config = PassConfig {
         max_opaque_ratio: 0.5, // Ensure max_predicates > 0
         ..Default::default()

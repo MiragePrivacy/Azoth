@@ -1,21 +1,22 @@
 use azoth_analysis::collect_metrics;
 use azoth_transform::shuffle::Shuffle;
 use azoth_transform::Transform;
-use rand::rngs::StdRng;
-use rand::SeedableRng;
+use azoth_utils::seed::Seed;
 
 #[tokio::test]
 async fn test_shuffle_reorders_blocks() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
-    let bytecode = "0x60015b6002"; // PUSH1 0x01, JUMPDEST, PUSH1 0x02
+    let bytecode = "0x6004565b60016000555b60026000555b6003600055";
     let mut cfg_ir = azoth_core::process_bytecode_to_cfg_only(bytecode, false)
         .await
         .unwrap();
 
     let before = collect_metrics(&cfg_ir, &cfg_ir.clean_report).unwrap();
-    let mut rng = StdRng::seed_from_u64(42);
+    let seed = Seed::from_hex("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+        .unwrap();
+    let mut rng = seed.create_deterministic_rng();
     let transform = Shuffle;
     let changed = transform.apply(&mut cfg_ir, &mut rng).unwrap();
     let after = collect_metrics(&cfg_ir, &cfg_ir.clean_report).unwrap();
