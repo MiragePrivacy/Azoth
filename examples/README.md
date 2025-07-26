@@ -7,7 +7,7 @@ An example use of Azoth in Mirage Protocol
 ```bash
 cd examples/
 chmod +x setup.sh
-./complete-setup.sh
+./setup.sh
 ```
 
 2. run the example:

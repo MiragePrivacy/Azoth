@@ -128,6 +128,19 @@ pub enum ObfuscateError {
     Serialize(#[from] serde_json::Error),
 }
 
+/// Errors that can occur in the seed system
+#[derive(Debug, Clone, Error)]
+pub enum SeedError {
+    #[error("Invalid seed length: expected 64 hex chars, got {0}")]
+    InvalidLength(usize),
+    #[error("Invalid hexadecimal in seed")]
+    InvalidHex,
+    #[error("Invalid relay secret for HMAC")]
+    InvalidRelaySecret,
+    #[error("Obfuscation failed: {0}")]
+    ObfuscationFailed(String),
+}
+
 // #[derive(Debug, Error)]
 // pub enum Error {
 //     #[error("decode error: {0}")]

@@ -1165,6 +1165,7 @@ version = "0.1.0"
 dependencies = [
  "azoth-core",
  "azoth-transform",
+ "azoth-utils",
  "chrono",
  "hex",
  "serde_json",
@@ -1217,7 +1218,10 @@ name = "azoth-utils"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "rand 0.9.1",
+ "serde",
  "serde_json",
+ "sha3",
  "thiserror 2.0.12",
 ]
 

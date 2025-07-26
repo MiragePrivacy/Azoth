@@ -6,8 +6,7 @@ use azoth_transform::function_dispatcher::{DispatcherPattern, FunctionDispatcher
 use azoth_transform::obfuscator::obfuscate_bytecode;
 use azoth_transform::obfuscator::ObfuscationConfig;
 use azoth_transform::{PassConfig, Transform};
-use rand::rngs::StdRng;
-use rand::SeedableRng;
+use azoth_utils::seed::Seed;
 
 /// Pretty-print dispatcher sections for debugging
 #[cfg(test)]
@@ -130,7 +129,9 @@ async fn test_dispatcher_detection() {
 fn test_dummy_selector_generation_safety() {
     let config = PassConfig::default();
     let transform = FunctionDispatcher::new(config);
-    let mut rng = StdRng::seed_from_u64(42);
+    let seed = Seed::from_hex("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+        .unwrap();
+    let mut rng = seed.create_deterministic_rng();
 
     let real_selectors = vec![
         FunctionSelector {
@@ -201,7 +202,9 @@ async fn test_pc_integrity_integration() {
 
     let config = PassConfig::default();
     let transform = FunctionDispatcher::new(config);
-    let mut rng = StdRng::seed_from_u64(42);
+    let seed = Seed::from_hex("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+        .unwrap();
+    let mut rng = seed.create_deterministic_rng();
 
     // Apply the transform
     let changed = transform.apply(&mut cfg_ir, &mut rng).unwrap();

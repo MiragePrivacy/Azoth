@@ -12,6 +12,7 @@ use azoth_transform::{
     jump_address_transformer::JumpAddressTransformer, opaque_predicate::OpaquePredicate,
     shuffle::Shuffle, PassConfig, Transform,
 };
+use azoth_utils::seed::Seed;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use tower::ServiceBuilder;
@@ -38,7 +39,7 @@ struct ObfuscationOptions {
     /// Enable jump address transformation
     jump_address_transform: Option<bool>,
     /// Custom seed for deterministic obfuscation
-    seed: Option<u64>,
+    seed: Option<String>,
     /// Obfuscation intensity (0.0 to 1.0)
     intensity: Option<f32>,
 }
@@ -82,7 +83,6 @@ struct GasAnalysis {
 struct ObfuscationMetadata {
     transforms_applied: Vec<String>,
     execution_time_ms: u64,
-    seed_used: u64,
     blocks_created: usize,
     instructions_added: usize,
     unknown_opcodes_count: usize,
@@ -189,7 +189,6 @@ async fn obfuscate_bytecode_handler(
                 metadata: ObfuscationMetadata {
                     transforms_applied: result.metadata.transforms_applied,
                     execution_time_ms: execution_time.as_millis() as u64,
-                    seed_used: result.metadata.seed_used,
                     blocks_created: result.blocks_created,
                     instructions_added: result.instructions_added,
                     unknown_opcodes_count: result.unknown_opcodes_count,
@@ -202,7 +201,7 @@ async fn obfuscate_bytecode_handler(
                 execution_time.as_millis(),
                 result.original_size,
                 result.obfuscated_size,
-                result.size_increase_percentage
+                result.size_increase_percentage,
             );
             Ok(ResponseJson(response))
         }
@@ -223,17 +222,19 @@ async fn perform_obfuscation(
     bytecode: &str,
     options: &ObfuscationOptions,
 ) -> Result<PipelineResult, Box<dyn std::error::Error + Send + Sync>> {
-    // Generate seed
-    let seed = options.seed.unwrap_or_else(|| {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    });
-
     // Configure transformation parameters
     let intensity = options.intensity.unwrap_or(0.5).clamp(0.0, 1.0);
+
+    // Handle seed creation/parsing
+    let seed = match &options.seed {
+        Some(seed_str) => {
+            // Try to parse as hex string
+            Seed::from_hex(seed_str).map_err(|e| {
+                format!("Invalid seed format: {e}. Expected 64-character hex string with or without 0x prefix")
+            })?
+        }
+        None => Seed::generate(),
+    };
 
     // Create transform pipeline based on options
     let mut transforms: Vec<Box<dyn Transform>> = Vec::new();
@@ -260,9 +261,8 @@ async fn perform_obfuscation(
         })));
     }
 
-    // Create obfuscation config using the unified pipeline
     let config = ObfuscationConfig {
-        seed,
+        seed: seed.clone(),
         transforms,
         pass_config: PassConfig {
             accept_threshold: 0.0,
@@ -273,8 +273,8 @@ async fn perform_obfuscation(
         preserve_unknown_opcodes: true,
     };
 
-    // Use the unified obfuscation pipeline from obfuscator.rs
-    obfuscate_bytecode(bytecode, config).await
+    let result = obfuscate_bytecode(bytecode, config).await?;
+    Ok(result)
 }
 
 /// Calculate deployment gas using EVM formula: 21000 + 4*zeros + 16*nonzeros
@@ -313,19 +313,22 @@ mod tests {
         let app = Router::new().route("/obfuscate", post(obfuscate_bytecode_handler));
         let server = TestServer::new(app).unwrap();
 
-        let simple_bytecode = "0x60015b6002"; // PUSH1 1, PUSH1 2, SSTORE
+        let bytecode = "0x6004565b60016000555b60026000555b6003600055";
         tracing::debug!(
             "Testing simple bytecode with transforms enabled: {}",
-            simple_bytecode
+            bytecode
         );
 
         let request = ObfuscateRequest {
-            bytecode: simple_bytecode.to_string(),
+            bytecode: bytecode.to_string(),
             options: Some(ObfuscationOptions {
                 shuffle: Some(true),            // Enable shuffle
                 opaque_predicates: Some(false), // Keep others disabled for simpler test
                 jump_address_transform: Some(false),
-                seed: Some(42),
+                seed: Some(
+                    "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                        .to_string(),
+                ),
                 intensity: Some(0.5),
             }),
         };
@@ -343,7 +346,7 @@ mod tests {
 
         // With shuffle enabled, the bytecode should change (even without dispatcher)
         assert_ne!(
-            body.obfuscated_bytecode, simple_bytecode,
+            body.obfuscated_bytecode, bytecode,
             "Bytecode should change when shuffle is enabled"
         );
     }
@@ -370,10 +373,11 @@ mod tests {
         let app = Router::new().route("/obfuscate", post(obfuscate_bytecode_handler));
         let server = TestServer::new(app).unwrap();
 
+        let fixed_seed = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
         let request = ObfuscateRequest {
             bytecode: "0x6001600255".to_string(),
             options: Some(ObfuscationOptions {
-                seed: Some(42), // Fixed seed
+                seed: Some(fixed_seed.to_string()), // Fixed seed
                 ..Default::default()
             }),
         };
@@ -390,6 +394,29 @@ mod tests {
 
         // Should produce identical results
         assert_eq!(body1.obfuscated_bytecode, body2.obfuscated_bytecode);
-        assert_eq!(body1.metadata.seed_used, body2.metadata.seed_used);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_seed_format() {
+        let app = Router::new().route("/obfuscate", post(obfuscate_bytecode_handler));
+        let server = TestServer::new(app).unwrap();
+
+        let request = ObfuscateRequest {
+            bytecode: "0x6001600255".to_string(),
+            options: Some(ObfuscationOptions {
+                seed: Some("invalid_seed".to_string()),
+                ..Default::default()
+            }),
+        };
+
+        let response = server.post("/obfuscate").json(&request).await;
+        assert_eq!(response.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = response.json::<ErrorResponse>();
+        assert!(body
+            .details
+            .as_ref()
+            .unwrap()
+            .contains("Invalid seed format"));
     }
 }

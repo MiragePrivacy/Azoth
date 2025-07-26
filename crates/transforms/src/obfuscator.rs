@@ -1,15 +1,15 @@
 use crate::function_dispatcher::FunctionDispatcher;
 use crate::{PassConfig, Transform};
 use azoth_core::{cfg_ir, decoder, detection, encoder, process_bytecode_to_cfg};
-use rand::SeedableRng;
+use azoth_utils::seed::Seed;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
 
 /// Configuration for the obfuscation pipeline
 pub struct ObfuscationConfig {
-    /// Random seed for deterministic obfuscation
-    pub seed: u64,
+    /// Cryptographic seed for deterministic obfuscation
+    pub seed: Seed,
     /// List of transforms to apply
     pub transforms: Vec<Box<dyn Transform>>,
     /// Pass configuration for transform behavior
@@ -18,10 +18,22 @@ pub struct ObfuscationConfig {
     pub preserve_unknown_opcodes: bool,
 }
 
+impl ObfuscationConfig {
+    /// Create config with a specific seed
+    pub fn with_seed(seed: Seed) -> Self {
+        Self {
+            seed,
+            transforms: Vec::new(),
+            pass_config: PassConfig::default(),
+            preserve_unknown_opcodes: true,
+        }
+    }
+}
+
 impl Default for ObfuscationConfig {
     fn default() -> Self {
         Self {
-            seed: 42,
+            seed: Seed::generate(),
             transforms: Vec::new(),
             pass_config: PassConfig::default(),
             preserve_unknown_opcodes: true,
@@ -32,7 +44,6 @@ impl Default for ObfuscationConfig {
 impl std::fmt::Debug for ObfuscationConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ObfuscationConfig")
-            .field("seed", &self.seed)
             .field(
                 "transforms",
                 &format!("{} transforms", self.transforms.len()),
@@ -72,8 +83,6 @@ pub struct ObfuscationResult {
 pub struct ObfuscationMetadata {
     /// Names of transforms that were applied
     pub transforms_applied: Vec<String>,
-    /// Seed used for the obfuscation
-    pub seed_used: u64,
     /// Whether the size limit was exceeded
     pub size_limit_exceeded: bool,
     /// Whether unknown opcodes were preserved
@@ -92,7 +101,6 @@ pub async fn obfuscate_bytecode(
 
     tracing::debug!("Starting obfuscation pipeline:");
     tracing::debug!("  Input size: {} bytes", original_size);
-    tracing::debug!("  Seed: 0x{:x}", config.seed);
     tracing::debug!("  User transforms: {}", config.transforms.len());
 
     // Process bytecode to CFG-IR using the helper
@@ -126,7 +134,7 @@ pub async fn obfuscate_bytecode(
     tracing::debug!("  CFG blocks: {}", original_block_count);
     tracing::debug!("  CFG instructions: {}", original_instruction_count);
 
-    // Step 5: Apply transforms conditionally based on bytecode analysis
+    // Step 3: Apply transforms conditionally based on bytecode analysis
     let mut all_transforms: Vec<Box<dyn crate::Transform>> = Vec::new();
 
     // Only add function dispatcher if the bytecode actually contains one
@@ -160,14 +168,10 @@ pub async fn obfuscate_bytecode(
     let mut any_transform_changed = false;
 
     if !all_transforms.is_empty() {
-        // Create shared RNG from config seed
-        let mut shared_rng = rand::rngs::StdRng::seed_from_u64(config.seed);
+        // Create deterministic RNG from cryptographic seed
+        let mut shared_rng = config.seed.create_deterministic_rng();
 
-        tracing::debug!(
-            "Applying {} transforms with shared RNG seed 0x{:x}",
-            all_transforms.len(),
-            config.seed
-        );
+        tracing::debug!("Applying {} transforms", all_transforms.len(),);
 
         for (i, transform) in all_transforms.iter().enumerate() {
             let transform_name = transform.name();
@@ -182,7 +186,7 @@ pub async fn obfuscate_bytecode(
                 pre_instruction_count
             );
 
-            // Apply transform with shared RNG
+            // Apply transform with deterministic RNG
             let transform_changed = match transform.apply(&mut cfg_ir, &mut shared_rng) {
                 Ok(changed) => {
                     tracing::debug!("    Result: changed={}", changed);
@@ -215,7 +219,7 @@ pub async fn obfuscate_bytecode(
         }
     }
 
-    // Step 6: Calculate metrics after transformation
+    // Step 4: Calculate metrics after transformation
     let final_block_count = cfg_ir.cfg.node_count();
     let final_instruction_count = count_instructions_in_cfg(&cfg_ir);
     let blocks_created = final_block_count.saturating_sub(original_block_count);
@@ -237,14 +241,14 @@ pub async fn obfuscate_bytecode(
         tracing::debug!("  {}", log_entry);
     }
 
-    // Step 7: Extract and encode instructions
+    // Step 5: Extract and encode instructions
     let all_instructions = extract_instructions_from_cfg(&cfg_ir);
     tracing::debug!(
         "  Extracted {} instructions from CFG",
         all_instructions.len()
     );
 
-    // Step 8: Encode back to bytecode
+    // Step 6: Encode back to bytecode
     let obfuscated_bytes = if config.preserve_unknown_opcodes {
         encoder::encode_with_original(&all_instructions, Some(&bytes))?
     } else {
@@ -253,7 +257,7 @@ pub async fn obfuscate_bytecode(
 
     tracing::debug!("  Encoded to {} bytes", obfuscated_bytes.len());
 
-    // Step 9: Reassemble final bytecode
+    // Step 7: Reassemble final bytecode
     let final_bytecode = cfg_ir.clean_report.reassemble(&obfuscated_bytes);
     let obfuscated_size = final_bytecode.len();
 
@@ -272,7 +276,7 @@ pub async fn obfuscate_bytecode(
         tracing::warn!("  Transform change flags: {:?}", transform_change_log);
     }
 
-    // Step 10: Detailed gas analysis
+    // Step 9: Detailed gas analysis
     let original_zero_bytes = bytes.iter().filter(|&&b| b == 0).count();
     let original_nonzero_bytes = bytes.len() - original_zero_bytes;
     let obfuscated_zero_bytes = final_bytecode.iter().filter(|&&b| b == 0).count();
@@ -300,7 +304,7 @@ pub async fn obfuscate_bytecode(
     tracing::debug!("  Obfuscated gas: {}", obfuscated_gas);
     tracing::debug!("  Gas delta: {:+}", gas_delta);
 
-    // Step 11: Check size limits
+    // Step 10: Check size limits
     let size_increase_percentage = if original_size > 0 {
         ((obfuscated_size as f64 - original_size as f64) / original_size as f64) * 100.0
     } else {
@@ -328,7 +332,6 @@ pub async fn obfuscate_bytecode(
         total_instructions,
         metadata: ObfuscationMetadata {
             transforms_applied,
-            seed_used: config.seed,
             size_limit_exceeded,
             unknown_opcodes_preserved: config.preserve_unknown_opcodes,
         },
@@ -449,7 +452,6 @@ pub fn create_gas_report(result: &ObfuscationResult) -> serde_json::Value {
         "blocks_created": result.blocks_created,
         "instructions_added": result.instructions_added,
         "transforms_applied": result.metadata.transforms_applied,
-        "seed_used": result.metadata.seed_used,
         "notes": if result.unknown_opcodes_count > 0 {
             "Unknown opcodes were preserved as raw bytes to maintain functionality"
         } else {
@@ -467,9 +469,10 @@ pub mod presets {
     };
 
     /// Default obfuscation with all transforms enabled
-    pub fn default_obfuscation(seed: Option<u64>) -> ObfuscationConfig {
+    pub fn default_obfuscation(seed: Option<Seed>) -> ObfuscationConfig {
+        let seed = seed.unwrap_or_else(Seed::generate);
         ObfuscationConfig {
-            seed: seed.unwrap_or(42),
+            seed,
             transforms: vec![
                 Box::new(Shuffle),
                 Box::new(OpaquePredicate::new(PassConfig::default())),
@@ -481,9 +484,10 @@ pub mod presets {
     }
 
     /// Light obfuscation (shuffle only)
-    pub fn light_obfuscation(seed: Option<u64>) -> ObfuscationConfig {
+    pub fn light_obfuscation(seed: Option<Seed>) -> ObfuscationConfig {
+        let seed = seed.unwrap_or_else(Seed::generate);
         ObfuscationConfig {
-            seed: seed.unwrap_or(42),
+            seed,
             transforms: vec![Box::new(Shuffle)],
             pass_config: PassConfig::default(),
             preserve_unknown_opcodes: true,
@@ -491,10 +495,11 @@ pub mod presets {
     }
 
     /// Custom obfuscation with specific intensity
-    pub fn custom_obfuscation(seed: Option<u64>, intensity: f32) -> ObfuscationConfig {
+    pub fn custom_obfuscation(seed: Option<Seed>, intensity: f32) -> ObfuscationConfig {
         let intensity = intensity.clamp(0.0, 1.0);
+        let seed = seed.unwrap_or_else(Seed::generate);
         ObfuscationConfig {
-            seed: seed.unwrap_or(42),
+            seed,
             transforms: vec![
                 Box::new(Shuffle),
                 Box::new(OpaquePredicate::new(PassConfig {
