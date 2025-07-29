@@ -9,6 +9,7 @@ use azoth_transform::obfuscator::{
 };
 use azoth_transform::{PassConfig, Transform};
 use azoth_utils::errors::ObfuscateError;
+use azoth_utils::seed::Seed;
 use clap::Args;
 use std::error::Error;
 use std::fs;
@@ -19,9 +20,9 @@ use std::path::Path;
 pub struct ObfuscateArgs {
     /// Input bytecode as a hex string, .hex file, or binary file containing EVM bytecode.
     pub input: String,
-    /// Random seed for transform application (default: 42).
-    #[arg(long, default_value_t = 42)]
-    seed: u64,
+    /// Cryptographic seed for deterministic obfuscation
+    #[arg(long)]
+    seed: Option<String>,
     /// Comma-separated list of OPTIONAL transforms (default: shuffle,jump_transform,opaque_pred).
     /// Note: function_dispatcher is ALWAYS applied and doesn't need to be specified.
     #[arg(long, default_value = "shuffle,jump_transform,opaque_pred")]
@@ -48,17 +49,23 @@ impl super::Command for ObfuscateArgs {
         let transforms = build_passes(&self.passes)?;
 
         // Step 3: Configure obfuscation
-        let config = ObfuscationConfig {
-            seed: self.seed,
-            transforms,
-            pass_config: PassConfig {
-                accept_threshold: self.accept_threshold,
-                aggressive: true,
-                max_size_delta: self.max_size_delta,
-                max_opaque_ratio: 0.5,
-            },
-            preserve_unknown_opcodes: true,
+        let mut config = if let Some(seed_hex) = self.seed {
+            // Use provided seed
+            let seed = Seed::from_hex(&seed_hex).map_err(|e| format!("Invalid seed hex: {e}"))?;
+            ObfuscationConfig::with_seed(seed)
+        } else {
+            // Use random seed
+            ObfuscationConfig::default()
         };
+
+        config.transforms = transforms;
+        config.pass_config = PassConfig {
+            accept_threshold: self.accept_threshold,
+            aggressive: true,
+            max_size_delta: self.max_size_delta,
+            max_opaque_ratio: 0.5,
+        };
+        config.preserve_unknown_opcodes = true;
 
         // Step 4: Run obfuscation pipeline
         let result = match obfuscate_bytecode(&input_bytecode, config).await {

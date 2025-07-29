@@ -1,3 +1,3 @@
-## azoth-utils
+# Azoth Utilities
 
-This crate contains all of the errors used in azoth.
+This crate contains shared utilities and foundational components for Azoth.

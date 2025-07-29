@@ -1,7 +1,6 @@
 use azoth_transform::jump_address_transformer::JumpAddressTransformer;
 use azoth_transform::{PassConfig, Transform};
-use rand::rngs::StdRng;
-use rand::SeedableRng;
+use azoth_utils::seed::Seed;
 
 #[tokio::test]
 async fn test_jump_address_transformer() {
@@ -23,7 +22,9 @@ async fn test_jump_address_transformer() {
         }
     }
 
-    let mut rng = StdRng::seed_from_u64(42);
+    let seed = Seed::from_hex("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+        .unwrap();
+    let mut rng = seed.create_deterministic_rng();
 
     // Use a config that allows the transformation
     let config = PassConfig {
@@ -61,7 +62,9 @@ async fn test_jump_address_transformer() {
 
 #[test]
 fn test_split_jump_target() {
-    let mut rng = StdRng::seed_from_u64(42);
+    let seed = Seed::from_hex("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+        .unwrap();
+    let mut rng = seed.create_deterministic_rng();
     let config = PassConfig::default();
     let transformer = JumpAddressTransformer::new(config);
 
