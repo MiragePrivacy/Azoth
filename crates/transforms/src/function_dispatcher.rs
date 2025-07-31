@@ -94,11 +94,11 @@ impl FunctionDispatcher {
     }
 
     /// Updates internal CALL instructions to use tokens instead of selectors
-    /// 
+    ///
     /// before update internal calls:
     /// PUSH4 <selector> // Function selector
     /// CALL             // Or DELEGATECALL, STATICCALL
-    /// 
+    ///
     /// after:
     /// PUSH1 <token>    // Corresponding token
     /// CALL             // Same call instruction
