@@ -2,7 +2,7 @@ use azoth_core::cfg_ir::Block;
 use azoth_core::decoder::Instruction;
 use azoth_core::detection::FunctionSelector;
 use azoth_core::{decoder, detection, process_bytecode_to_cfg_only, Opcode};
-use azoth_transform::function_dispatcher::{DispatcherPattern, FunctionDispatcher};
+use azoth_transform::function_dispatcher::FunctionDispatcher;
 use azoth_transform::obfuscator::obfuscate_bytecode;
 use azoth_transform::obfuscator::ObfuscationConfig;
 use azoth_transform::{PassConfig, Transform};
@@ -52,12 +52,46 @@ fn test_opcode_type_safety() {
     assert_eq!(auto_push_instr.imm, Some("42".to_string()));
 }
 
+#[test]
+fn test_token_generation() {
+    let config = PassConfig::default();
+    let transform = FunctionDispatcher::new(config);
+    let seed = Seed::from_hex("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+        .unwrap();
+    let mut rng = seed.create_deterministic_rng();
+
+    let selectors = vec![
+        FunctionSelector {
+            selector: 0xa9059cbb, // transfer(address,uint256)
+            target_address: 0x1234,
+            instruction_index: 0,
+        },
+        FunctionSelector {
+            selector: 0x095ea7b3, // approve(address,uint256)
+            target_address: 0x5678,
+            instruction_index: 10,
+        },
+    ];
+
+    let mapping = transform.generate_mapping(&selectors, &mut rng).unwrap();
+
+    // Should have mapping for both selectors
+    assert_eq!(mapping.len(), 2);
+    assert!(mapping.contains_key(&0xa9059cbb));
+    assert!(mapping.contains_key(&0x095ea7b3));
+
+    // Tokens should be different (no collisions)
+    let token1 = mapping[&0xa9059cbb];
+    let token2 = mapping[&0x095ea7b3];
+    assert_ne!(token1, token2, "Tokens should be unique");
+
+    println!("Generated mapping:");
+    println!("  0xa9059cbb -> 0x{:02x}", token1);
+    println!("  0x095ea7b3 -> 0x{:02x}", token2);
+}
+
 #[tokio::test]
 async fn test_dispatcher_detection() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
-
     let config = PassConfig::default();
     let transform = FunctionDispatcher::new(config);
 
@@ -125,80 +159,181 @@ async fn test_dispatcher_detection() {
     );
 }
 
-#[test]
-fn test_dummy_selector_generation_safety() {
+#[tokio::test]
+async fn test_token_dispatcher_transformation() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .try_init()
+        .ok();
+
+    // Use the example bytecode with exposed selectors
+    let bytecode =
+        "0x60003560e01c80637ff36ab514601a578063a9059cbb14602157600080fd5b600080fd5b600080fd";
+
+    println!("Input bytecode: {}", bytecode);
+
+    // Decode and analyze original structure
+    let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+
+    println!("\nOriginal dispatcher structure:");
+    for (i, instr) in instructions.iter().enumerate() {
+        if instr.opcode.starts_with("PUSH4") {
+            println!(
+                "  [{}] {} {} ← EXPOSED SELECTOR",
+                i,
+                instr.opcode,
+                instr.imm.as_deref().unwrap_or("")
+            );
+        } else {
+            println!(
+                "  [{}] {} {}",
+                i,
+                instr.opcode,
+                instr.imm.as_deref().unwrap_or("")
+            );
+        }
+    }
+
+    // Detect selectors
+    if let Some(dispatcher_info) = detection::detect_function_dispatcher(&instructions) {
+        println!("\nDetected selectors:");
+        for selector in &dispatcher_info.selectors {
+            println!(
+                "  0x{:08x} -> jump target 0x{:x}",
+                selector.selector, selector.target_address
+            );
+        }
+    }
+
+    // Apply token-based obfuscation
+    let config = ObfuscationConfig::default();
+    let result = obfuscate_bytecode(bytecode, config).await.unwrap();
+
+    println!("\nTransformation result:");
+    println!("  Original: {} bytes", result.original_size);
+    println!("  Obfuscated: {} bytes", result.obfuscated_size);
+    println!("  Size change: {:+.1}%", result.size_increase_percentage);
+    println!("  Transforms: {:?}", result.metadata.transforms_applied);
+
+    // Verify transformation was applied
+    assert!(
+        result
+            .metadata
+            .transforms_applied
+            .contains(&"FunctionDispatcher".to_string()),
+        "FunctionDispatcher should be applied"
+    );
+
+    assert_ne!(
+        result.obfuscated_bytecode, bytecode,
+        "Bytecode should be modified"
+    );
+
+    // Decode obfuscated bytecode to verify tokens replaced selectors
+    let (obfuscated_instructions, _, _) =
+        decoder::decode_bytecode(&result.obfuscated_bytecode, false)
+            .await
+            .unwrap();
+
+    println!("\nObfuscated dispatcher structure:");
+    for (i, instr) in obfuscated_instructions.iter().enumerate() {
+        if instr.opcode == "PUSH1"
+            && instr
+                .imm
+                .as_ref()
+                .map_or(false, |imm| imm != "00" && imm != "ff")
+        {
+            println!(
+                "  [{}] {} {} ← HIDDEN TOKEN",
+                i,
+                instr.opcode,
+                instr.imm.as_deref().unwrap_or("")
+            );
+        } else {
+            println!(
+                "  [{}] {} {}",
+                i,
+                instr.opcode,
+                instr.imm.as_deref().unwrap_or("")
+            );
+        }
+    }
+
+    // Verify no PUSH4 selectors remain
+    let push4_count = obfuscated_instructions
+        .iter()
+        .filter(|instr| instr.opcode == "PUSH4")
+        .count();
+
+    assert_eq!(
+        push4_count, 0,
+        "No PUSH4 instructions should remain in obfuscated dispatcher"
+    );
+
+    println!("\n✓ Selectors successfully replaced with tokens");
+    println!("✓ No PUSH4 instructions remain in dispatcher");
+    println!("✓ Function fingerprinting prevented");
+}
+
+#[tokio::test]
+async fn test_internal_call_updates() {
     let config = PassConfig::default();
     let transform = FunctionDispatcher::new(config);
     let seed = Seed::from_hex("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
         .unwrap();
     let mut rng = seed.create_deterministic_rng();
 
-    let real_selectors = vec![
+    // Create CFG with PUSH4 + CALL pattern
+    let bytecode = "0x63a9059cbbf163095ea7b3f1"; // PUSH4 selector1 CALL PUSH4 selector2 CALL
+    let mut cfg_ir = process_bytecode_to_cfg_only(bytecode, false).await.unwrap();
+
+    // Create selector mapping
+    let selectors = vec![
         FunctionSelector {
-            selector: 0x12345678,
-            target_address: 0x100,
+            selector: 0xa9059cbb,
+            target_address: 0x1234,
             instruction_index: 0,
         },
         FunctionSelector {
-            selector: 0x87654321,
-            target_address: 0x200,
-            instruction_index: 10,
+            selector: 0x095ea7b3,
+            target_address: 0x5678,
+            instruction_index: 3,
         },
     ];
 
-    // Should always succeed even with many existing selectors
-    for _ in 0..100 {
-        let dummy = transform.generate_dummy_selector(&real_selectors, &mut rng);
-        assert_ne!(dummy, 0x12345678);
-        assert_ne!(dummy, 0x87654321);
+    let mapping = transform.generate_mapping(&selectors, &mut rng).unwrap();
+
+    // Apply internal call updates
+    transform
+        .update_internal_calls(&mut cfg_ir, &mapping)
+        .unwrap();
+
+    // Verify PUSH4 instructions were replaced with PUSH1
+    for node_idx in cfg_ir.cfg.node_indices() {
+        if let Block::Body { instructions, .. } = &cfg_ir.cfg[node_idx] {
+            for instr in instructions {
+                // Should not find any PUSH4 instructions
+                assert_ne!(
+                    instr.opcode, "PUSH4",
+                    "PUSH4 instructions should be replaced"
+                );
+            }
+        }
     }
-}
 
-#[test]
-fn test_stack_depth_calculation() {
-    let config = PassConfig::default();
-    let transform = FunctionDispatcher::new(config);
-
-    assert_eq!(
-        transform.calculate_stack_depth(&DispatcherPattern::Standard),
-        2
-    );
-    assert_eq!(
-        transform.calculate_stack_depth(&DispatcherPattern::Arithmetic),
-        3
-    );
-    assert_eq!(
-        transform.calculate_stack_depth(&DispatcherPattern::Inverted),
-        3
-    );
-    assert_eq!(
-        transform.calculate_stack_depth(&DispatcherPattern::Cascaded),
-        4
-    );
+    println!("✓ Internal CALL instructions successfully updated to use tokens");
 }
 
 #[tokio::test]
 async fn test_pc_integrity_integration() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
-        .init();
+        .try_init()
+        .ok();
 
-    // Create a simple bytecode with a dispatcher-like pattern
-    let bytecode = "0x6000356020527f63c29855780817ffffffffffffffffffffffffffffffff5b";
+    let bytecode =
+        "0x60003560e01c80637ff36ab514601a578063a9059cbb14602157600080fd5b600080fd5b600080fd";
     let mut cfg_ir = process_bytecode_to_cfg_only(bytecode, false).await.unwrap();
-
-    // Get original PC count
-    let _original_total_size = cfg_ir
-        .cfg
-        .node_indices()
-        .filter_map(|idx| {
-            if let Block::Body { instructions, .. } = &cfg_ir.cfg[idx] {
-                Some(instructions.len())
-            } else {
-                None
-            }
-        })
-        .sum::<usize>();
 
     let config = PassConfig::default();
     let transform = FunctionDispatcher::new(config);
@@ -265,68 +400,92 @@ async fn test_pc_integrity_integration() {
             }
         }
 
-        tracing::debug!("PC integrity verified after dispatcher transformation");
+        tracing::debug!("PC integrity verified after token dispatcher transformation");
     }
 }
 
 #[tokio::test]
-async fn test_obfuscate_with_function_dispatcher() {
+async fn test_obfuscate_with_token_dispatcher() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .try_init()
-        .ok(); // Ignore if already initialized
+        .ok();
 
-    // Bytecode with function dispatcher pattern
-    let bytecode = "0x60003580632e64cec114601757806360fe47b1146019575b005b00";
+    // Use the example bytecode with exposed selectors
+    let bytecode =
+        "0x60003560e01c80637ff36ab514601a578063a9059cbb14602157600080fd5b600080fd5b600080fd";
     let config = ObfuscationConfig::default();
 
-    tracing::debug!("Testing bytecode: {}", bytecode);
+    tracing::debug!("Testing token-based dispatcher with bytecode: {}", bytecode);
 
-    // Let's first decode and analyze the bytecode manually
+    // Analyze original bytecode
     let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
-    tracing::debug!("Decoded {} instructions", instructions.len());
+    tracing::debug!("Original bytecode has {} instructions", instructions.len());
 
-    for (i, instr) in instructions.iter().enumerate() {
-        tracing::debug!("  [{}] PC:{} {} {:?}", i, instr.pc, instr.opcode, instr.imm);
-    }
+    // Count original PUSH4 instructions (exposed selectors)
+    let original_push4_count = instructions
+        .iter()
+        .filter(|instr| instr.opcode == "PUSH4")
+        .count();
 
-    // Test dispatcher detection directly
+    tracing::debug!("Original PUSH4 count: {}", original_push4_count);
+
+    // Test dispatcher detection
     let dispatcher_detected = detection::has_dispatcher(&instructions);
     tracing::debug!("Dispatcher detected: {}", dispatcher_detected);
 
     if let Some(dispatcher_info) = detection::detect_function_dispatcher(&instructions) {
-        tracing::debug!("Dispatcher info: {:?}", dispatcher_info);
-    } else {
-        tracing::debug!("No dispatcher info found");
+        tracing::debug!(
+            "Found {} selectors in dispatcher",
+            dispatcher_info.selectors.len()
+        );
+        for selector in &dispatcher_info.selectors {
+            tracing::debug!("  Selector: 0x{:08x}", selector.selector);
+        }
     }
 
+    // Apply obfuscation
     let result = obfuscate_bytecode(bytecode, config).await.unwrap();
 
-    tracing::debug!("Obfuscation result:");
+    tracing::debug!("Obfuscation completed:");
     tracing::debug!("  Original: {}", bytecode);
     tracing::debug!("  Obfuscated: {}", result.obfuscated_bytecode);
-    tracing::debug!(
-        "  Transforms applied: {:?}",
-        result.metadata.transforms_applied
-    );
-    tracing::debug!("  Instructions added: {}", result.instructions_added);
-    tracing::debug!("  Blocks created: {}", result.blocks_created);
+    tracing::debug!("  Size change: {:+.1}%", result.size_increase_percentage);
 
-    // Should detect dispatcher and apply FunctionDispatcher transform
+    // Should apply FunctionDispatcher transform
     assert!(
         result
             .metadata
             .transforms_applied
             .contains(&"FunctionDispatcher".to_string()),
-        "FunctionDispatcher transform was not applied. Applied transforms: {:?}",
-        result.metadata.transforms_applied
+        "FunctionDispatcher transform should be applied"
     );
+
+    // Bytecode should be different
+    assert_ne!(
+        result.obfuscated_bytecode, bytecode,
+        "Obfuscated bytecode should differ from original"
+    );
+
+    // Verify transformation: decode obfuscated bytecode
+    let (obfuscated_instructions, _, _) =
+        decoder::decode_bytecode(&result.obfuscated_bytecode, false)
+            .await
+            .unwrap();
+
+    // Count PUSH4 in obfuscated version (should be 0 in dispatcher)
+    let obfuscated_push4_count = obfuscated_instructions
+        .iter()
+        .filter(|instr| instr.opcode == "PUSH4")
+        .count();
+
+    tracing::debug!("Obfuscated PUSH4 count: {}", obfuscated_push4_count);
+
+    // In dispatcher region, PUSH4 should be replaced with PUSH1
     assert!(
-        result.obfuscated_bytecode != bytecode,
-        "Bytecode was not modified"
+        obfuscated_push4_count < original_push4_count,
+        "PUSH4 count should be reduced (selectors replaced with tokens)"
     );
-    assert!(
-        result.instructions_added > 0 || result.blocks_created > 0,
-        "No instructions added or blocks created"
-    );
+
+    tracing::debug!("✓ Function selectors hidden from bytecode analysis");
 }
