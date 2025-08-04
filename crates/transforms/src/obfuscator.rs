@@ -78,7 +78,7 @@ pub struct ObfuscationResult {
     /// Metadata about the obfuscation process
     pub metadata: ObfuscationMetadata,
     /// Mapping from original selectors to tokens (if token dispatcher was applied)
-    pub selector_mapping: Option<HashMap<u32, u8>>,
+    pub selector_mapping: Option<HashMap<u32, Vec<u8>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

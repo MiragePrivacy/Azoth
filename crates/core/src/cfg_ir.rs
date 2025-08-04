@@ -78,7 +78,7 @@ pub struct CfgIrBundle {
     pub clean_report: crate::strip::CleanReport,
     /// Mapping of original function selectors to obfuscated tokens.
     /// Only populated when token-based dispatcher transform is applied.
-    pub selector_mapping: Option<HashMap<u32, u8>>,
+    pub selector_mapping: Option<HashMap<u32, Vec<u8>>>,
 }
 
 /// Builds a CFG with IR in SSA form from decoded instructions and sections.

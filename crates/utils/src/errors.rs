@@ -103,6 +103,8 @@ pub enum TransformError {
     CoreError(#[from] CfgIrError),
     #[error("metrics computation failed")]
     MetricsError(#[from] MetricsError),
+    #[error("generic error")]
+    Generic(String),
 }
 
 /// Errors that can occur during obfuscation.
