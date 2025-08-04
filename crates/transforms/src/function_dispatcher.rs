@@ -188,7 +188,7 @@ impl FunctionDispatcher {
 
         // Phase 3: Token extraction using variable-size mask
         //
-        // The choice for `ffff`(or any other size it takes) isn't arbitrary, it's hexadecimal where f reprsents
+        // The choice for `ffff`(or any other size it takes) isn't arbitrary, it's hexadecimal where f represents
         // the binary value `1111`
         // Input:  1010110101001101...  (calldata)
         // Mask:   111111111111111111111111  (ffffff)
