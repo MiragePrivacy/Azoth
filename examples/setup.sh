@@ -30,46 +30,46 @@ if command -v forge &> /dev/null; then
     
     # Install dependencies
     echo "   Installing OpenZeppelin contracts..."
-    forge install OpenZeppelin/openzeppelin-contracts --no-git --no-commit || true
+    forge install OpenZeppelin/openzeppelin-contracts@v5.0.2 --no-git || true
     
     # Copy our contract to src/
-    echo "   Copying MirageEscrow.sol..."
-    cp ../contracts/MirageEscrow.sol src/ 2>/dev/null || true
+    echo "   Copying Escrow.sol..."
+    cp ../contracts/Escrow.sol src/ 2>/dev/null || true
     
     # Compile contracts
     echo "   Compiling contracts..."
-    forge build
+    if ! forge build; then
+        echo "   ❌ Compilation failed. Check Escrow.sol for errors."
+        exit 1
+    fi
     
-    if [ -f "out/MirageEscrow.sol/MirageEscrow.json" ]; then
-        echo "   ✅ MirageEscrow compiled successfully!"
+    if [ -f "out/Escrow.sol/Escrow.json" ]; then
+        echo "   ✅ Escrow compiled successfully!"
         # Show some info about the compiled contract
-        BYTECODE_SIZE=$(jq -r '.bytecode.object' out/MirageEscrow.sol/MirageEscrow.json | wc -c)
+        BYTECODE_SIZE=$(jq -r '.bytecode.object' out/Escrow.sol/Escrow.json | wc -c)
         echo "   📏 Bytecode size: $((BYTECODE_SIZE/2)) bytes"
     else
-        echo "   ⚠️  Compilation may have failed, will use fallback contract"
+        echo "   ❌ Compilation failed: Artifact not found (out/Escrow.sol/Escrow.json)"
+        exit 1
     fi
     
     cd ..
 else
-    echo "   ⚠️  Forge not found. Install Foundry for real contract compilation:"
+    echo "   ⚠️ Forge not found. Install Foundry for real contract compilation:"
     echo "   curl -L https://foundry.paradigm.xyz | bash"
     echo "   foundryup"
-    echo ""
-    echo "   Will use fallback contract for demo"
+    exit 1
 fi
 
 echo ""
 echo "🦀 Building Rust project..."
-cargo build
+if ! cargo build; then
+    echo "   ❌ Rust project compilation failed."
+    exit 1
+fi
 
 echo ""
-echo "🎉 Setup complete! Ready to demonstrate Mirage workflow"
-echo ""
-echo "📋 What's been set up:"
-echo "   ✅ Foundry project with MirageEscrow contract"
-echo "   ✅ Compiled bytecode ready for obfuscation"  
-echo "   ✅ Rust workflow implementation"
-echo "   ✅ Gas analysis and integrity verification"
-echo ""
-echo "🚀 Run the demo:"
-echo "   cargo run --bin azoth-examples"
+echo "🎉 Setup complete!"
+echo "📋 Next steps:"
+echo "   Run the demo: cargo run --bin azoth-examples"
+echo "   Verify the report: cat mirage_report.json"

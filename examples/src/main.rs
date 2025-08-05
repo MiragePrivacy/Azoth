@@ -6,7 +6,7 @@ use azoth_utils::seed::Seed;
 use serde_json::json;
 use std::fs;
 
-const MIRAGE_ESCROW_PATH: &str = "foundry-contracts/out/MirageEscrow.sol/MirageEscrow.json";
+const MIRAGE_ESCROW_PATH: &str = "foundry-contracts/out/Escrow.sol/Escrow.json";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -18,10 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let seed_k2 =
         Seed::from_hex("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")?;
 
-    println!(
-        "Loaded MirageEscrow bytecode: {} bytes",
-        original_bytecode.len()
-    );
+    println!("Loaded Escrow bytecode: {} bytes", original_bytecode.len());
 
     // SENDER: Compile with obfuscation O(S, K2)
     println!("\nSENDER: Compiling contract with obfuscation...");
@@ -124,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-/// Load MirageEscrow contract bytecode from Foundry artifacts
+/// Load Escrow contract bytecode from Foundry artifacts
 fn load_mirage_contract() -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let content = fs::read_to_string(MIRAGE_ESCROW_PATH)
         .map_err(|_| format!("Failed to load contract from {MIRAGE_ESCROW_PATH}\nRun './complete-setup.sh' first to compile contracts"))?;
