@@ -8,7 +8,7 @@ interface IERC20 {
 }
 
 contract Escrow {
-    // The following variables are set up in the contructor.
+    // The following variables are set up in the constructor.
     address immutable deployerAddress;
     address immutable tokenContract; // The tokens used in the escrow
     // address immutable paymentTokenContract; // The tokens used in the payment to the recipient
