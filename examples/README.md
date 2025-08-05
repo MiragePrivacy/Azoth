@@ -1,16 +1,15 @@
 # Azoth Examples
 An example use of Azoth in Mirage Protocol
 
-## Quick start
+Quick start:
 
-1. initial setup:
 ```bash
 cd examples/
-chmod +x setup.sh
-./setup.sh
+chmod +x run_escrow.sh
+./run_escrow.sh
 ```
 
-2. run the example:
-```bash
-cargo run --bin azoth-examples
-```
+## Notes
+
+- The Escrow bytecode is sourced from MiragePrivacy/escrow/artifacts/bytecode.hex
+- Output reports are saved to mirage_report.json for analysis.
