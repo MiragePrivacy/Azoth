@@ -6,7 +6,7 @@ use azoth_utils::seed::Seed;
 use serde_json::json;
 use std::fs;
 
-const MIRAGE_ESCROW_PATH: &str = "foundry-contracts/out/Escrow.sol/Escrow.json";
+const MIRAGE_ESCROW_PATH: &str = "escrow-bytecode/artifacts/bytecode.hex";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -121,24 +121,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-/// Load Escrow contract bytecode from Foundry artifacts
+/// Load Escrow contract bytecode from submodule artifact
 fn load_mirage_contract() -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let content = fs::read_to_string(MIRAGE_ESCROW_PATH)
-        .map_err(|_| format!("Failed to load contract from {MIRAGE_ESCROW_PATH}\nRun './complete-setup.sh' first to compile contracts"))?;
+        .map_err(|_| format!("Failed to load bytecode from {MIRAGE_ESCROW_PATH}\nRun './run_escrow.sh' to update submodule"))?;
 
-    let artifact: serde_json::Value = serde_json::from_str(&content)?;
-
-    let bytecode_str = artifact["bytecode"]["object"]
-        .as_str()
-        .ok_or("Missing bytecode.object in artifact")?;
-
-    let clean_bytecode = bytecode_str.strip_prefix("0x").unwrap_or(bytecode_str);
+    let clean_bytecode = content.trim().strip_prefix("0x").unwrap_or(content.trim());
 
     if clean_bytecode.is_empty() || clean_bytecode.len() < 20 {
         return Err("Invalid or empty bytecode in artifact".into());
     }
 
-    Ok(hex::decode(clean_bytecode)?)
+    hex::decode(clean_bytecode).map_err(|e| format!("Hex decode error: {e}").into())
 }
 
 /// Apply Mirage obfuscation transforms using the unified pipeline

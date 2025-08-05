@@ -1,0 +1,3 @@
+[submodule "examples/escrow-bytecode"]
+	path = examples/escrow-bytecode
+	url = https://github.com/MiragePrivacy/escrow
