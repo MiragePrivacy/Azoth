@@ -105,10 +105,10 @@ Replaces Solidity-style dispatchers with a cryptographically hardened version th
 Key Features:
 
 * Extracts variable-size token from calldata using obfuscated arithmetic (e.g., `XOR`, `SUB`, `MSTORE/MLOAD`)
-* Replaces all `PUSH4 <selector>` checks with `PUSHn <token>` (1–8 byte length)
+* Replaces all `PUSH4 <selector>` checks with `PUSH4 <token>`
 * Shuffles the comparison order
 * Uses cryptographic `keccak256(secret || selector)[:n]` to derive unique tokens
-* Updates all internal `PUSH4 selector; CALL` instructions to use `PUSHn token; CALL`
+* Updates all internal `PUSH4 selector; CALL` instructions to use `PUSH4 token; CALL`
 
 Example:
 
