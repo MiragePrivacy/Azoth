@@ -3,9 +3,9 @@
 ///
 /// This module builds a CFG from decoded EVM instructions, representing the program's control
 /// flow as a graph of basic blocks connected by edges. It supports SSA form for stack
-/// operations, enabling analysis and obfuscation transforms (e.g., shuffle, stack-noise,
-/// opaque-predicates). The CFG is used to analyze and modify bytecode structure, ensuring
-/// accurate block splitting and edge construction based on control flow opcodes.
+/// operations, enabling analysis and obfuscation transforms. The CFG is used to analyze and modify
+/// bytecode structure, ensuring accurate block splitting and edge construction based on
+/// control flow opcodes.
 use crate::decoder::Instruction;
 use crate::detection::Section;
 use crate::{is_block_ending_opcode, is_terminal_opcode};
@@ -76,6 +76,9 @@ pub struct CfgIrBundle {
     pub pc_to_block: HashMap<usize, NodeIndex>,
     /// Report detailing the stripping process for bytecode reassembly.
     pub clean_report: crate::strip::CleanReport,
+    /// Mapping of original function selectors to obfuscated tokens.
+    /// Only populated when token-based dispatcher transform is applied.
+    pub selector_mapping: Option<HashMap<u32, Vec<u8>>>,
 }
 
 /// Builds a CFG with IR in SSA form from decoded instructions and sections.
@@ -135,6 +138,7 @@ pub fn build_cfg_ir(
         cfg,
         pc_to_block,
         clean_report: report,
+        selector_mapping: None, // Initially empty, set by transforms
     })
 }
 
@@ -154,11 +158,13 @@ impl CfgIrBundle {
         new_bytecode: Vec<u8>,
     ) -> Result<(), CfgIrError> {
         let clean_report = self.clean_report.clone();
+        let selector_mapping = self.selector_mapping.clone(); // Preserve mapping
         let new_bundle = build_cfg_ir(&instructions, sections, &new_bytecode, clean_report)?;
 
         self.cfg = new_bundle.cfg;
         self.pc_to_block = new_bundle.pc_to_block;
         self.clean_report = new_bundle.clean_report;
+        self.selector_mapping = selector_mapping; // Restore mapping
 
         Ok(())
     }

@@ -24,13 +24,14 @@ Original -> 0x60015b6002
 Shuffled -> 0x5b60026001
 ```
 
-###  Opaque Predicate (`opaque_predicate.rs`)
+### Opaque Predicate (`opaque_predicate.rs`)
 
 Injects always-true (or always-false) predicates built from cheap arithmetic or constant-equality (e.g., XOR + ISZERO or EQ on identical constants). Adds dummy control-flow that never influences observable behavior but explodes CFG shape.
 
 Example
 
 Original bytecode: 0x6001600260016003 (8 bytes, 4 instructions, 1 block)
+
 ```assembly
 PUSH1 0x01
 PUSH1 0x02  
@@ -39,6 +40,7 @@ PUSH1 0x03
 ```
 
 After OpaquePredicate: (~80–100 bytes, ~12 instructions, 3 blocks; seed-dependent)
+
 ```assembly
 // Original block (now with predicate appended)
 PUSH1 0x01
@@ -83,6 +85,7 @@ STOP
 ```
 
 After JumpAddressTransformer: 0x60046004015760015b00 (10 bytes, 7 instructions, 3 blocks)
+
 ```assembly
 PUSH1 0x04    // First part of split target
 PUSH1 0x04    // Second part (0x04 + 0x04 = 0x08)
@@ -95,59 +98,70 @@ STOP
 
 Changes: +3 bytes, +2 instructions; replaces direct 0x08 with 0x04 + 0x04 via ADD. Net +6 gas (2 extra PUSH1s + ADD – original single PUSH1).
 
-### Function Dispatcher (function_dispatcher.rs)
+### Function Dispatcher (`function_dispatcher.rs`)
 
-Obfuscates Solidity function dispatcher patterns by randomizing selector check order, adding dummy comparisons, and using different comparison patterns.
+Replaces Solidity-style dispatchers with a cryptographically hardened version that is resistant to selector fingerprinting and pattern-based detection.
 
-Example
+Key Features:
+
+* Extracts variable-size token from calldata using obfuscated arithmetic (e.g., `XOR`, `SUB`, `MSTORE/MLOAD`)
+* Replaces all `PUSH4 <selector>` checks with `PUSH4 <token>`
+* Shuffles the comparison order
+* Uses cryptographic `keccak256(secret || selector)[:n]` to derive unique tokens
+* Updates all internal `PUSH4 selector; CALL` instructions to use `PUSH4 token; CALL`
+
+Example:
 
 Original dispatcher:
+
 ```assembly
 PUSH1 0x00
 CALLDATALOAD
+PUSH1 0xe0
+SHR
 DUP1
-PUSH4 0x2e64cec1    // Real selector A
+PUSH4 0x7ff36ab5
 EQ
-PUSH1 0x17          // Jump to function A
+PUSH1 0x1a
 JUMPI
-DUP1  
-PUSH4 0x60fe47b1    // Real selector B
+DUP1
+PUSH4 0xa9059cbb
 EQ
-PUSH1 0x19          // Jump to function B  
+PUSH1 0x21
 JUMPI
-JUMPDEST            // Function A
-STOP
-JUMPDEST            // Function B
-STOP
 ```
 
 Obfuscated dispatcher:
+
 ```assembly
-PUSH1 0x00
+PUSH1 0x39
+PUSH1 0x39
+XOR                  ; disguised 0x00
 CALLDATALOAD
-PUSH1 0xE0
-SHR                 // Explicit selector extraction
+PUSH6 0xffffffffffff
+AND                  ; extract token from calldata[0..6]
 DUP1
-PUSH4 0x2e64cec1    // Real selector A (kept)
+PUSH3 0x04cad8       ; derived token for a9059cbb
 EQ
-ISZERO              // Inverted branch logic
-PUSH1 0x62          // Jump past padding if NOT equal
+PUSH1 0x30
 JUMPI
-PUSH1 0x59          // Dummy branch target
-JUMP
 DUP1
-PUSH4 0x3fad005b    // Fake selector (was 0x60fe47b1)
+PUSH6 0xc7f582f5e403 ; derived token for 7ff36ab5
 EQ
-STOP                // Dead code + 62 bytes of 0x00 padding
+PUSH1 0x29
+JUMPI
+PUSH1 0x00
+DUP1
+REVERT
 ```
 
 Changes:
-- 27 bytes → 89 bytes, +248 (≈ 1.2 %) gas
-- Inserted PUSH1 0xE0; SHR.
-- Inverted the branch with ISZERO (and swapped jump targets).
-- Added a “fake” branch (PUSH1 0x59; JUMP) that jumps into padding.
-- Replaced the second selector 0x60fe47b1 with 0x3fad005b.
-- Inserted 62 zero bytes (`0x00`, decoded as STOP) as padding while keeping the non‑zero‑byte count unchanged (24).
+
+* Selector matching replaced with token-based matching
+* Dispatcher logic completely obscured (no SHR, no 4-byte selector)
+* Jump targets patched accordingly
+
+This makes function selectors unrecognizable and completely eliminates static pattern matching.
 
 ### Transform Interface
 
@@ -160,7 +174,9 @@ pub trait Transform: Send + Sync {
 ```
 
 ### Pass Execution
+
 The pass.rs module provides a simple sequential pass runner:
+
 ```rust
 use azoth_transform::{run, PassConfig};
 
@@ -174,7 +190,9 @@ run(&mut cfg_ir, &transforms, &PassConfig::default(), seed).await?;
 ```
 
 ### Configuration
+
 Basic configuration through PassConfig:
+
 ```rust
 pub struct PassConfig {
     pub accept_threshold: f64,      // Minimum quality threshold

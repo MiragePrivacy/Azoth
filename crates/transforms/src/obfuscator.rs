@@ -4,7 +4,7 @@ use azoth_core::{cfg_ir, decoder, detection, encoder, process_bytecode_to_cfg};
 use azoth_utils::seed::Seed;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Configuration for the obfuscation pipeline
 pub struct ObfuscationConfig {
@@ -77,6 +77,8 @@ pub struct ObfuscationResult {
     pub total_instructions: usize,
     /// Metadata about the obfuscation process
     pub metadata: ObfuscationMetadata,
+    /// Mapping from original selectors to tokens (if token dispatcher was applied)
+    pub selector_mapping: Option<HashMap<u32, Vec<u8>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -335,6 +337,7 @@ pub async fn obfuscate_bytecode(
             size_limit_exceeded,
             unknown_opcodes_preserved: config.preserve_unknown_opcodes,
         },
+        selector_mapping: cfg_ir.selector_mapping, // Extract from CFG bundle
     })
 }
 
