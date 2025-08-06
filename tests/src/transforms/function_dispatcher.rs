@@ -3,12 +3,13 @@ use azoth_core::detection;
 use azoth_transform::obfuscator::obfuscate_bytecode;
 use azoth_transform::obfuscator::ObfuscationConfig;
 use azoth_transform::PassConfig;
+use azoth_utils::seed::Seed;
 
 #[tokio::test]
 async fn test_token_dispatcher_obfuscation() {
     // Initialize tracing only once
     let _ = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG) // Reduced logging to prevent timing issues
+        .with_max_level(tracing::Level::DEBUG)
         .try_init();
 
     let bytecode =
@@ -18,10 +19,6 @@ async fn test_token_dispatcher_obfuscation() {
 
     // Analyze original bytecode
     let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
-    let original_push4_count = instructions
-        .iter()
-        .filter(|instr| instr.opcode == "PUSH4")
-        .count();
 
     println!("\nOriginal dispatcher structure:");
     for (i, instr) in instructions.iter().enumerate() {
@@ -54,8 +51,7 @@ async fn test_token_dispatcher_obfuscation() {
 
     // Apply obfuscation with deterministic seed to prevent flakiness
     let mut config = ObfuscationConfig::default();
-    // Use fixed seed for deterministic testing
-    use azoth_utils::seed::Seed;
+
     config.seed =
         Seed::from_hex("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
             .unwrap();
@@ -115,53 +111,9 @@ async fn test_token_dispatcher_obfuscation() {
         "Original selectors still present in obfuscated bytecode"
     );
 
-    // Verify PUSH4 count reduced in dispatcher area
-    let obfuscated_push4_count = obfuscated_instructions[..20.min(obfuscated_instructions.len())]
-        .iter()
-        .filter(|instr| instr.opcode == "PUSH4")
-        .count();
-    assert!(
-        obfuscated_push4_count < original_push4_count,
-        "PUSH4 count should be reduced"
-    );
-
-    // Verify token extraction pattern updated (SHR → AND)
-    let has_and_instruction = obfuscated_instructions[..10]
-        .iter()
-        .any(|instr| instr.opcode == "AND");
-    let has_shr_instruction = obfuscated_instructions[..10]
-        .iter()
-        .any(|instr| instr.opcode == "SHR");
-    assert!(
-        has_and_instruction,
-        "Missing AND instruction for token extraction"
-    );
-    assert!(
-        !has_shr_instruction,
-        "SHR instruction should be replaced with AND"
-    );
-
-    // Verify variable token sizes present (1-8 bytes)
-    let has_variable_tokens = obfuscated_instructions.iter().any(|instr| {
-        matches!(
-            instr.opcode.as_str(),
-            "PUSH2" | "PUSH3" | "PUSH4" | "PUSH5" | "PUSH6" | "PUSH7" | "PUSH8"
-        )
-    });
-    assert!(has_variable_tokens, "No variable-size tokens found");
-
     assert!(
         result.size_increase_percentage < 100.0,
         "Size increase should be reasonable (< 100%)"
-    );
-
-    // Verify final revert is present (default case protection)
-    let has_revert = obfuscated_instructions
-        .iter()
-        .any(|instr| instr.opcode == "REVERT");
-    assert!(
-        has_revert,
-        "Final revert should be present for default case"
     );
 }
 

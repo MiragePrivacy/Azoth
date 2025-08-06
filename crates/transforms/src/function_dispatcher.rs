@@ -65,10 +65,10 @@ impl FunctionDispatcher {
 
         for selector_info in selectors {
             // Generate token with variable size (1-8 bytes)
-            let token_size = rng.random_range(1..=8);
+            let token_size = 4;
             let mut token = self.derive_token(selector_info.selector, &secret, token_size);
 
-            // Handle collisions by tweaking secret slightly (more efficient)
+            // Handle collisions
             let mut attempt = 0;
             while used_tokens.contains(&token) && attempt < 100 {
                 let mut new_secret = secret.clone();
