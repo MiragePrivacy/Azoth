@@ -85,11 +85,6 @@ impl FunctionDispatcher {
 
             mapping.insert(selector_info.selector, token.clone());
             used_tokens.insert(token.clone());
-
-            debug!(
-                "Generated {}-byte token mapping: 0x{:08x} → {:02x?}",
-                token_size, selector_info.selector, token
-            );
         }
 
         Ok(mapping)
