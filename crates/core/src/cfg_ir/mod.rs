@@ -6,7 +6,6 @@
 /// operations, enabling analysis and obfuscation transforms. The CFG is used to analyze and modify
 /// bytecode structure, ensuring accurate block splitting and edge construction based on
 /// control flow opcodes.
-
 use crate::decoder::Instruction;
 use crate::detection::Section;
 use crate::is_terminal_opcode;

@@ -6,7 +6,7 @@ use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use std::collections::HashMap;
 
-use super::{Block, EdgeType, CfgIrBundle, is_terminal_opcode};
+use super::{Block, CfgIrBundle, EdgeType, is_terminal_opcode};
 
 impl CfgIrBundle {
     /// Reindexes all PC values after bytecode modifications.

@@ -7,7 +7,10 @@ use azoth_utils::errors::CfgIrError;
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::{HashMap, HashSet};
 
-use super::{Block, EdgeType, CfgIrBundle, collect_jump_targets, validate_jump_targets, create_blocks_for_targets, assign_ssa_values};
+use super::{
+    Block, CfgIrBundle, EdgeType, assign_ssa_values, collect_jump_targets,
+    create_blocks_for_targets, validate_jump_targets,
+};
 
 /// Type alias for the return type of `build_edges`.
 type BuildEdgesResult = Result<
