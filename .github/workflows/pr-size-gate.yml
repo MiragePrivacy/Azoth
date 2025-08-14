@@ -7,21 +7,39 @@ on:
 jobs:
   check-size:
     runs-on: ubuntu-latest
+
     steps:
+      # 1. Checkout **all** history so the base branch ref is available
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # do NOT use the default shallow clone
 
-      - name: Count added lines
+      # 2. Count additions + deletions between base and head
+      - name: Compute change size
         id: diff
         run: |
-          # Count additions between PR head (current) and its base branch
-          ADDED=$(git diff --numstat origin/${{ github.base_ref }}...HEAD \
-                  | awk '{added += $1} END {print added}')
-          echo "Added lines: $ADDED"
-          echo "added=$ADDED" >> "$GITHUB_OUTPUT"
+          # (Safety) Make sure the base branch is present
+          git fetch origin ${{ github.base_ref }} --depth=1
 
+          # Gather per‑file stats:  added | deleted | path
+          # Sum the first two columns to get totals
+          read -r ADDED DELETED <<<"$(git diff --numstat origin/${{ github.base_ref }}...HEAD \
+                                       | awk '{a+=$1; d+=$2} END {print a, d}')"
+          TOTAL=$((ADDED + DELETED))
+
+          echo "Added lines   : $ADDED"
+          echo "Deleted lines : $DELETED"
+          echo "Total changed : $TOTAL"
+
+          # Expose totals to later steps
+          echo "added=$ADDED"   >>"$GITHUB_OUTPUT"
+          echo "deleted=$DELETED" >>"$GITHUB_OUTPUT"
+          echo "total=$TOTAL"   >>"$GITHUB_OUTPUT"
+
+      # 3. Fail the workflow if the total exceeds 500
       - name: Fail if over limit
-        if: ${{ steps.diff.outputs.added > 500 }}
+        if: ${{ steps.diff.outputs.total > 500 }}
         run: |
-          echo "::error::Pull-request adds more than 500 lines (${{ steps.diff.outputs.added }})"
+          echo "::error::Pull request changes exceed 500 lines (${{ steps.diff.outputs.total }})"
           exit 1
