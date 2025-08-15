@@ -1,63 +1,8 @@
-use crate::Opcode;
-/// Module for detecting and classifying bytecode regions (Init, Runtime, ConstructorArgs,
-/// Auxdata, Padding) as part of BOSC Step 1 preprocessing.
-///
-/// This module implements the structural analysis of EVM bytecode to extract runtime bytecode,
-/// remove deployment and auxdata bytecode, and provide exact byte-ranges for subsequent stages
-/// (e.g., stripping and recovery). It uses raw bytes, decoded instructions, and metadata from
-/// `decoder.rs` to identify logical regions based on opcode patterns and byte-level
-/// signatures.
-///
-/// # Usage
-/// ```rust,ignore
-/// let (instructions, _, _) = decoder::decode_bytecode("0x60016002", false).await.unwrap();
-/// let sections =
-///     locate_sections(&hex::decode("60016002").unwrap(), &instructions).unwrap();
-/// assert!(!sections.is_empty());
-/// ```
+use super::dispatcher::detect_function_dispatcher;
 use crate::decoder::Instruction;
 use crate::is_terminal_opcode;
 use azoth_utils::errors::DetectError;
 use serde::{Deserialize, Serialize};
-
-/// Represents a detected function dispatcher with its selectors and metadata.
-#[derive(Debug, Clone)]
-pub struct DispatcherInfo {
-    /// Start offset of the dispatcher in the instruction sequence
-    pub start_offset: usize,
-    /// End offset of the dispatcher in the instruction sequence  
-    pub end_offset: usize,
-    /// List of detected function selectors
-    pub selectors: Vec<FunctionSelector>,
-    /// Type of calldata extraction pattern used
-    pub extraction_pattern: ExtractionPattern,
-}
-
-/// Represents a function selector found in the dispatcher.
-#[derive(Debug, Clone)]
-pub struct FunctionSelector {
-    /// 4-byte function selector (first 4 bytes of keccak256(function_signature))
-    pub selector: u32,
-    /// Target address to jump to when this selector matches
-    pub target_address: u64,
-    /// Index in the instruction sequence where this selector check begins
-    pub instruction_index: usize,
-}
-
-/// Types of calldata extraction patterns used by Solidity compilers.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ExtractionPattern {
-    /// Standard: PUSH1 0x00 CALLDATALOAD PUSH1 0xE0 SHR
-    Standard,
-    /// Alternative: PUSH1 0x00 CALLDATALOAD PUSH29 ... SHR
-    Alternative,
-    /// Newer: CALLDATALOAD PUSH29 ... SHR (newer Solidity)
-    Newer,
-    /// Fallback: CALLDATASIZE ISZERO (fallback-only contracts)
-    Fallback,
-    /// Direct: PUSH1 0x00 CALLDATALOAD (no shift, direct comparison)
-    Direct,
-}
 
 /// Represents the type of a bytecode section.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -276,6 +221,25 @@ pub fn locate_sections(
     Ok(sections)
 }
 
+/// Helper to extract runtime instructions from full bytecode
+pub fn extract_runtime_instructions(
+    instructions: &[Instruction],
+    aux_offset: usize,
+) -> Option<&[Instruction]> {
+    // Try to find the init/runtime split
+    if let Some((_, runtime_start)) = detect_deployment_fallback(instructions, aux_offset) {
+        // Find the instruction index that corresponds to runtime_start PC
+        let runtime_instr_start = instructions
+            .iter()
+            .position(|instr| instr.pc >= runtime_start)?;
+
+        return Some(&instructions[runtime_instr_start..]);
+    }
+
+    // If no split found, assume entire bytecode is runtime
+    Some(instructions)
+}
+
 /// Fallback deployment detection for when the strict pattern fails
 fn detect_deployment_fallback(
     instructions: &[Instruction],
@@ -288,27 +252,25 @@ fn detect_deployment_fallback(
         }
     }
 
-    // Method 2: Look for function dispatcher pattern (indicates runtime start)
-    if let Some(dispatcher_info) = detect_function_dispatcher(instructions) {
-        // If we found a dispatcher, assume everything before it is Init
-        let runtime_start = dispatcher_info.start_offset;
-        if runtime_start > 0 && runtime_start < aux_offset {
+    // Method 2: Use dispatcher detection on potential runtime segments
+    // Look for dispatcher patterns and infer runtime start from them
+    for i in 100..instructions.len().min(aux_offset / 2) {
+        let potential_runtime = &instructions[i..];
+        if detect_function_dispatcher(potential_runtime).is_some() {
+            let runtime_start = instructions[i].pc;
             tracing::debug!(
-                "Using function dispatcher at offset {} as runtime start",
+                "Using dispatcher detection at PC {} as runtime start",
                 runtime_start
             );
             return Some((runtime_start, runtime_start));
         }
     }
 
-    // Method 3: Heuristic based on instruction patterns
-    // Look for the transition from deployment-style to runtime-style code
+    // Method 3: Original heuristic
     for instruction in instructions.iter() {
-        // Common runtime start patterns
         if instruction.opcode == "CALLDATASIZE"
             || (instruction.opcode == "PUSH1" && instruction.imm.as_deref() == Some("00"))
         {
-            // This might be the start of runtime code
             let potential_runtime_start = instruction.pc;
             if potential_runtime_start > 100 && potential_runtime_start < aux_offset {
                 tracing::debug!(
@@ -604,281 +566,4 @@ fn detect_constructor_args(
     } else {
         None
     }
-}
-
-/// Detects Solidity function dispatcher patterns in the given instructions.
-///
-/// This function identifies the standard dispatcher pattern used by Solidity:
-/// 1. Extract function selector from calldata
-/// 2. Compare against known function selectors
-/// 3. Jump to appropriate function or revert
-///
-/// # Arguments
-/// * `instructions` - Decoded EVM instructions to analyze
-///
-/// # Returns
-/// `Some(DispatcherInfo)` if a dispatcher is detected, `None` otherwise
-///
-/// # Examples
-/// ```rust,ignore
-/// let instructions = decode_contract_bytecode();
-/// if let Some(dispatcher) = detect_function_dispatcher(&instructions) {
-///     println!("Found dispatcher with {} selectors", dispatcher.selectors.len());
-/// }
-/// ```
-pub fn detect_function_dispatcher(instructions: &[Instruction]) -> Option<DispatcherInfo> {
-    // Look for the calldata extraction pattern first
-    let mut start_idx = None;
-    let mut extraction_pattern = None;
-
-    for i in 0..instructions.len().saturating_sub(6) {
-        if let Some(pattern) = is_calldata_extraction_pattern(&instructions[i..]) {
-            start_idx = Some(i);
-            extraction_pattern = Some(pattern);
-            break;
-        }
-    }
-
-    let start = start_idx?;
-    let pattern = extraction_pattern?;
-    let mut selectors = Vec::new();
-    let mut current_idx = start + get_extraction_pattern_length(&instructions[start..], &pattern)?;
-
-    // Look for function selector comparisons
-    while current_idx < instructions.len().saturating_sub(6) {
-        if let Some(selector) = parse_selector_check(&instructions[current_idx..]) {
-            selectors.push(FunctionSelector {
-                selector: selector.0,
-                target_address: selector.1,
-                instruction_index: current_idx,
-            });
-            current_idx += 5; // Standard pattern is 5 instructions: DUP1, PUSH4, EQ, PUSH2, JUMPI
-        } else {
-            break;
-        }
-    }
-
-    if !selectors.is_empty() {
-        Some(DispatcherInfo {
-            start_offset: start,
-            end_offset: current_idx,
-            selectors,
-            extraction_pattern: pattern,
-        })
-    } else {
-        None
-    }
-}
-
-/// Checks if the instruction sequence matches a known calldata extraction pattern.
-///
-/// Identifies the various patterns used by different Solidity compiler versions
-/// to extract the 4-byte function selector from calldata.
-///
-/// # Arguments
-/// * `instrs` - Instruction sequence to check (should start at potential pattern)
-///
-/// # Returns
-/// `Some(ExtractionPattern)` if a pattern is detected, `None` otherwise
-pub fn is_calldata_extraction_pattern(instrs: &[Instruction]) -> Option<ExtractionPattern> {
-    if instrs.len() < 2 {
-        return None;
-    }
-
-    // Pattern 1: [PUSH1 0x00 | PUSH0] CALLDATALOAD PUSH1 0xE0 SHR
-    if instrs.len() >= 4
-        && ((instrs[0].opcode == Opcode::PUSH(1).to_string()
-            && instrs[0].imm.as_deref() == Some("00"))
-            || instrs[0].opcode == Opcode::PUSH(0).to_string())
-        && instrs[1].opcode == Opcode::CALLDATALOAD.to_string()
-        && instrs[2].opcode == Opcode::PUSH(1).to_string()
-        && instrs[2].imm.as_deref() == Some("e0")
-        && instrs[3].opcode == Opcode::SHR.to_string()
-    {
-        return Some(ExtractionPattern::Standard);
-    }
-
-    // Pattern 2: [PUSH1 0x00 | PUSH0] CALLDATALOAD PUSH29 ... SHR
-    if instrs.len() >= 4
-        && ((instrs[0].opcode == Opcode::PUSH(1).to_string()
-            && instrs[0].imm.as_deref() == Some("00"))
-            || instrs[0].opcode == Opcode::PUSH(0).to_string())
-        && instrs[1].opcode == Opcode::CALLDATALOAD.to_string()
-        && instrs[2].opcode == Opcode::PUSH(29).to_string()
-        && instrs[3].opcode == Opcode::SHR.to_string()
-    {
-        return Some(ExtractionPattern::Alternative);
-    }
-
-    // Pattern 3: CALLDATALOAD PUSH29 ... SHR (newer Solidity)
-    if instrs.len() >= 3
-        && instrs[0].opcode == Opcode::CALLDATALOAD.to_string()
-        && instrs[1].opcode == Opcode::PUSH(29).to_string()
-        && instrs[2].opcode == Opcode::SHR.to_string()
-    {
-        return Some(ExtractionPattern::Newer);
-    }
-
-    // Pattern 4: CALLDATASIZE ISZERO (fallback-only contracts)
-    if instrs.len() >= 2
-        && instrs[0].opcode == Opcode::CALLDATASIZE.to_string()
-        && instrs[1].opcode == Opcode::ISZERO.to_string()
-    {
-        return Some(ExtractionPattern::Fallback);
-    }
-
-    // Pattern 5: Direct comparison without shift - PUSH1 0x00 CALLDATALOAD
-    if instrs.len() >= 2
-        && ((instrs[0].opcode == Opcode::PUSH(1).to_string()
-            && instrs[0].imm.as_deref() == Some("00"))
-            || instrs[0].opcode == Opcode::PUSH(0).to_string())
-        && instrs[1].opcode == Opcode::CALLDATALOAD.to_string()
-    {
-        tracing::debug!("Matched Direct extraction pattern (no shift)");
-        return Some(ExtractionPattern::Direct);
-    }
-
-    // Fallback: scan for CALLDATALOAD + SHR within first 6 instructions
-    for i in 0..instrs.len().min(6).saturating_sub(1) {
-        if instrs[i].opcode == Opcode::CALLDATALOAD.to_string() {
-            for instr in instrs.iter().skip(i + 1).take(3) {
-                if instr.opcode == Opcode::SHR.to_string() {
-                    return Some(ExtractionPattern::Standard); // Default to standard for fallback
-                }
-            }
-        }
-    }
-
-    None
-}
-
-/// Gets the instruction length of an extraction pattern.
-///
-/// # Arguments
-/// * `instrs` - Instructions starting with the extraction pattern
-/// * `pattern` - The detected extraction pattern type
-///
-/// # Returns
-/// Some(n) if pattern matches; None otherwise
-fn get_extraction_pattern_length(
-    instrs: &[Instruction],
-    pattern: &ExtractionPattern,
-) -> Option<usize> {
-    match pattern {
-        ExtractionPattern::Standard => {
-            if instrs.len() >= 4
-                && instrs[0].opcode == Opcode::PUSH(1).to_string()
-                && instrs[0].imm.as_deref() == Some("00")
-                && instrs[1].opcode == Opcode::CALLDATALOAD.to_string()
-                && instrs[2].opcode == Opcode::PUSH(1).to_string()
-                && instrs[2].imm.as_deref() == Some("e0")
-                && instrs[3].opcode == Opcode::SHR.to_string()
-            {
-                Some(4)
-            } else {
-                None
-            }
-        }
-        ExtractionPattern::Alternative => {
-            if instrs.len() >= 4
-                && instrs[0].opcode == Opcode::PUSH(1).to_string()
-                && instrs[0].imm.as_deref() == Some("00")
-                && instrs[1].opcode == Opcode::CALLDATALOAD.to_string()
-                && instrs[2].opcode == Opcode::PUSH(29).to_string()
-                && instrs[3].opcode == Opcode::SHR.to_string()
-            {
-                Some(4)
-            } else {
-                None
-            }
-        }
-        ExtractionPattern::Newer => {
-            if instrs.len() >= 3
-                && instrs[0].opcode == Opcode::CALLDATALOAD.to_string()
-                && instrs[1].opcode == Opcode::PUSH(29).to_string()
-                && instrs[2].opcode == Opcode::SHR.to_string()
-            {
-                Some(3)
-            } else {
-                None
-            }
-        }
-        ExtractionPattern::Fallback => {
-            if instrs.len() >= 2
-                && instrs[0].opcode == Opcode::CALLDATASIZE.to_string()
-                && instrs[1].opcode == Opcode::ISZERO.to_string()
-            {
-                Some(2)
-            } else {
-                None
-            }
-        }
-        ExtractionPattern::Direct => {
-            if instrs.len() >= 2
-                && ((instrs[0].opcode == Opcode::PUSH(1).to_string()
-                    && instrs[0].imm.as_deref() == Some("00"))
-                    || instrs[0].opcode == Opcode::PUSH(0).to_string())
-                && instrs[1].opcode == Opcode::CALLDATALOAD.to_string()
-            {
-                Some(2)
-            } else {
-                None
-            }
-        }
-    }
-}
-
-/// Parses a function selector comparison pattern.
-///
-/// Identifies the standard pattern: DUP1 [optional PUSH0|PUSH1 0x00] PUSH4 <selector> EQ PUSH{1,2} <addr> JUMPI
-///
-/// # Arguments
-/// * `instrs` - Instructions starting at potential selector check
-///
-/// # Returns
-/// `Some((selector, target_address))` if pattern matches, `None` otherwise
-fn parse_selector_check(instrs: &[Instruction]) -> Option<(u32, u64)> {
-    if instrs.len() < 5 {
-        return None;
-    }
-
-    let mut i = 0;
-
-    // Must start with DUP1
-    if instrs.get(i)?.opcode != Opcode::DUP(1).to_string() {
-        return None;
-    }
-    i += 1;
-
-    // Must have PUSH4 with selector
-    if instrs.get(i)?.opcode != Opcode::PUSH(4).to_string() {
-        return None;
-    }
-    let selector = u32::from_str_radix(instrs[i].imm.as_ref()?, 16).ok()?;
-    i += 1;
-
-    // Must have EQ
-    if instrs.get(i)?.opcode != Opcode::EQ.to_string() {
-        return None;
-    }
-    i += 1;
-
-    // Must have PUSH1 or PUSH2 with address
-    if !instrs.get(i)?.opcode.starts_with("PUSH1") && !instrs.get(i)?.opcode.starts_with("PUSH2") {
-        return None;
-    }
-    let address = u64::from_str_radix(instrs[i].imm.as_ref()?, 16).ok()?;
-    i += 1;
-
-    // Must have JUMPI
-    if instrs.get(i)?.opcode != Opcode::JUMPI.to_string() {
-        return None;
-    }
-
-    Some((selector, address))
-}
-
-/// Returns true iff a canonical dispatcher was found.
-pub fn has_dispatcher(instructions: &[Instruction]) -> bool {
-    detect_function_dispatcher(instructions).is_some()
 }
