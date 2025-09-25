@@ -1238,7 +1238,7 @@ pub mod tests {
     #[test]
     fn test_function_selector_extraction() {
         let cfg_bundle = CfgIrBundle {
-            cfg: petgraph::Graph::new().into(),
+            cfg: petgraph::Graph::new(),
             pc_to_block: HashMap::new(),
             clean_report: create_empty_clean_report(),
             selector_mapping: None,
@@ -1279,7 +1279,7 @@ pub mod tests {
         pc_to_block.insert(0, node_idx);
 
         let cfg_bundle = CfgIrBundle {
-            cfg: cfg.into(),
+            cfg,
             pc_to_block,
             clean_report: create_empty_clean_report(),
             selector_mapping: None,
@@ -1295,7 +1295,7 @@ pub mod tests {
     #[test]
     fn test_transfer_function_detection() {
         let cfg_bundle = CfgIrBundle {
-            cfg: petgraph::Graph::new().into(),
+            cfg: petgraph::Graph::new(),
             pc_to_block: HashMap::new(),
             clean_report: create_empty_clean_report(),
             selector_mapping: None,
