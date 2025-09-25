@@ -62,15 +62,16 @@ pub fn locate_sections(
 
     // Special case: If auxdata starts at offset 0, the entire bytecode is auxdata
     if aux_offset == 0
-        && let Some((offset, len)) = auxdata {
-            tracing::debug!("Entire bytecode is auxdata: offset={}, len={}", offset, len);
-            sections.push(Section {
-                kind: SectionKind::Auxdata,
-                offset,
-                len,
-            });
-            return Ok(sections);
-        }
+        && let Some((offset, len)) = auxdata
+    {
+        tracing::debug!("Entire bytecode is auxdata: offset={}, len={}", offset, len);
+        sections.push(Section {
+            kind: SectionKind::Auxdata,
+            offset,
+            len,
+        });
+        return Ok(sections);
+    }
 
     // Pass B: Detect Padding before Auxdata
     let padding = detect_padding(instructions, aux_offset);
@@ -137,15 +138,14 @@ pub fn locate_sections(
     }
 
     // Only push Padding if ConstructorArgs is not present
-    if !has_constructor_args
-        && let Some((pad_offset, pad_len)) = padding {
-            tracing::debug!("Padding detected: offset={}, len={}", pad_offset, pad_len);
-            sections.push(Section {
-                kind: SectionKind::Padding,
-                offset: pad_offset,
-                len: pad_len,
-            });
-        }
+    if !has_constructor_args && let Some((pad_offset, pad_len)) = padding {
+        tracing::debug!("Padding detected: offset={}, len={}", pad_offset, pad_len);
+        sections.push(Section {
+            kind: SectionKind::Padding,
+            offset: pad_offset,
+            len: pad_len,
+        });
+    }
 
     // Pass E: Create sections based on detected boundaries
     if init_end == 0 && runtime_start == 0 {
@@ -245,9 +245,10 @@ fn detect_deployment_fallback(
 ) -> Option<(usize, usize)> {
     // Method 1: Look for CODECOPY + RETURN pattern
     if let Some((init_end, runtime_start)) = detect_codecopy_return_simple(instructions)
-        && runtime_start < aux_offset {
-            return Some((init_end, runtime_start));
-        }
+        && runtime_start < aux_offset
+    {
+        return Some((init_end, runtime_start));
+    }
 
     // Method 2: Use dispatcher detection on potential runtime segments
     // Look for dispatcher patterns and infer runtime start from them
@@ -302,11 +303,13 @@ fn detect_codecopy_return_simple(instructions: &[Instruction]) -> Option<(usize,
     for i in (0..codecopy_idx).rev().take(10) {
         if instructions[i].opcode.starts_with("PUSH")
             && let Some(imm) = &instructions[i].imm
-                && let Ok(value) = usize::from_str_radix(imm, 16)
-                    && value > init_end && value < 100000 {
-                        runtime_start = value;
-                        break;
-                    }
+            && let Ok(value) = usize::from_str_radix(imm, 16)
+            && value > init_end
+            && value < 100000
+        {
+            runtime_start = value;
+            break;
+        }
     }
 
     tracing::debug!(
@@ -498,19 +501,20 @@ fn detect_codecopy_return_pattern(instructions: &[Instruction]) -> Option<(usize
     for i in (0..codecopy_idx).rev().take(10) {
         if instructions[i].opcode.starts_with("PUSH")
             && let Some(imm) = &instructions[i].imm
-                && let Ok(value) = usize::from_str_radix(imm, 16) {
-                    if runtime_len.is_none() && value > 0 && value < 100000 {
-                        // First reasonable value could be runtime length
-                        runtime_len = Some(value);
-                    } else if runtime_start.is_none() && value > 0 && value < 100000 {
-                        // Second reasonable value could be runtime start
-                        runtime_start = Some(value);
-                    }
+            && let Ok(value) = usize::from_str_radix(imm, 16)
+        {
+            if runtime_len.is_none() && value > 0 && value < 100000 {
+                // First reasonable value could be runtime length
+                runtime_len = Some(value);
+            } else if runtime_start.is_none() && value > 0 && value < 100000 {
+                // Second reasonable value could be runtime start
+                runtime_start = Some(value);
+            }
 
-                    if runtime_len.is_some() && runtime_start.is_some() {
-                        break;
-                    }
-                }
+            if runtime_len.is_some() && runtime_start.is_some() {
+                break;
+            }
+        }
     }
 
     // If we found CODECOPY + RETURN but can't extract parameters,

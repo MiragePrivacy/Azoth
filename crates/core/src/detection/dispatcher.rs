@@ -156,21 +156,21 @@ fn try_byte_pattern_fallback(instructions: &[Instruction]) -> Option<Vec<u32>> {
     for (i, instr) in instructions.iter().enumerate() {
         if instr.opcode == "PUSH4"
             && let Some(selector_hex) = &instr.imm
-                && let Ok(selector) = u32::from_str_radix(selector_hex, 16) {
-                    // Enhanced validation: look for EQ or GT instruction after PUSH4
-                    if i + 1 < instructions.len()
-                        && (instructions[i + 1].opcode == "EQ"
-                            || instructions[i + 1].opcode == "GT")
-                    {
-                        tracing::debug!(
-                            "Found selector candidate 0x{:08x} at instruction {} (followed by {})",
-                            selector,
-                            i,
-                            instructions[i + 1].opcode
-                        );
-                        selectors.push(selector);
-                    }
-                }
+            && let Ok(selector) = u32::from_str_radix(selector_hex, 16)
+        {
+            // Enhanced validation: look for EQ or GT instruction after PUSH4
+            if i + 1 < instructions.len()
+                && (instructions[i + 1].opcode == "EQ" || instructions[i + 1].opcode == "GT")
+            {
+                tracing::debug!(
+                    "Found selector candidate 0x{:08x} at instruction {} (followed by {})",
+                    selector,
+                    i,
+                    instructions[i + 1].opcode
+                );
+                selectors.push(selector);
+            }
+        }
     }
 
     tracing::debug!("Byte pattern fallback found {} selectors", selectors.len());
@@ -233,29 +233,31 @@ fn try_detect_dispatcher_at(instrs: &[Instruction], base_offset: usize) -> Optio
             current_idx += selector_info.2; // block length
         } else {
             // Look for PUSH4 instructions that might be selectors
-            if current_idx < instrs.len() && instrs[current_idx].opcode == "PUSH4"
+            if current_idx < instrs.len()
+                && instrs[current_idx].opcode == "PUSH4"
                 && let Some(selector_hex) = &instrs[current_idx].imm
-                    && let Ok(selector) = u32::from_str_radix(selector_hex, 16) {
-                        // Check if this looks like a selector (followed by EQ or GT)
-                        if current_idx + 1 < instrs.len()
-                            && (instrs[current_idx + 1].opcode == "EQ"
-                                || instrs[current_idx + 1].opcode == "GT")
-                        {
-                            selectors.push(FunctionSelector {
-                                selector,
-                                target_address: 0, // Unknown
-                                instruction_index: base_offset + current_idx,
-                            });
-                            tracing::debug!(
-                                "Found loose selector 0x{:08x} at instruction {} (followed by {})",
-                                selector,
-                                current_idx,
-                                instrs[current_idx + 1].opcode
-                            );
-                            current_idx += 2; // Skip PUSH4 + EQ/GT
-                            continue;
-                        }
-                    }
+                && let Ok(selector) = u32::from_str_radix(selector_hex, 16)
+            {
+                // Check if this looks like a selector (followed by EQ or GT)
+                if current_idx + 1 < instrs.len()
+                    && (instrs[current_idx + 1].opcode == "EQ"
+                        || instrs[current_idx + 1].opcode == "GT")
+                {
+                    selectors.push(FunctionSelector {
+                        selector,
+                        target_address: 0, // Unknown
+                        instruction_index: base_offset + current_idx,
+                    });
+                    tracing::debug!(
+                        "Found loose selector 0x{:08x} at instruction {} (followed by {})",
+                        selector,
+                        current_idx,
+                        instrs[current_idx + 1].opcode
+                    );
+                    current_idx += 2; // Skip PUSH4 + EQ/GT
+                    continue;
+                }
+            }
 
             current_idx += 1;
         }
@@ -507,9 +509,10 @@ fn parse_selector_check(instrs: &[Instruction]) -> Option<(u32, u64, usize)> {
                 || instr.opcode == "PUSH3"
                 || instr.opcode == "PUSH4")
             && let Some(imm) = &instr.imm
-                && let Ok(addr) = u64::from_str_radix(imm, 16) {
-                    address = addr;
-                }
+            && let Ok(addr) = u64::from_str_radix(imm, 16)
+        {
+            address = addr;
+        }
 
         // Look for JUMPI
         if instr.opcode == "JUMPI" {
