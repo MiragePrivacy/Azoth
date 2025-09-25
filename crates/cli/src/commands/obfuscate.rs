@@ -120,7 +120,7 @@ fn read_input(input: &str) -> Result<String, Box<dyn Error>> {
 /// Normalizes a hex string by removing prefixes and underscores.
 fn normalise_hex(s: &str) -> Result<String, ObfuscateError> {
     let stripped = s.trim().trim_start_matches("0x").replace('_', "");
-    if stripped.len() % 2 != 0 {
+    if !stripped.len().is_multiple_of(2) {
         return Err(ObfuscateError::OddLength(stripped.len()));
     }
     Ok(stripped)

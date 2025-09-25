@@ -10,8 +10,10 @@
 
 use crate::{config::EvmConfig, VerificationError, VerificationResult};
 use revm::{
-    primitives::{Address, BlockEnv, Bytecode, Env, Log, TransactTo, TxEnv, B256, U256},
-    Database, DatabaseCommit, Evm,
+    context::{BlockEnv, CfgEnv, TxEnv},
+    primitives::{Address, Log, B256, U256},
+    state::{AccountInfo, Bytecode},
+    Context, Database, DatabaseCommit, ExecuteEvm, MainBuilder,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -89,16 +91,7 @@ pub struct ExecutionState {
 pub struct InMemoryDB {
     accounts: HashMap<Address, AccountInfo>,
     storage: HashMap<(Address, U256), U256>,
-    block_hashes: HashMap<U256, B256>,
-}
-
-/// Account information
-#[derive(Debug, Clone, Default)]
-pub struct AccountInfo {
-    pub balance: U256,
-    pub nonce: u64,
-    pub code_hash: B256,
-    pub code: Option<Bytecode>,
+    block_hashes: HashMap<u64, B256>,
 }
 
 impl PracticalTester {
@@ -341,35 +334,37 @@ impl PracticalTester {
         test_tx: &TestTransaction,
     ) -> VerificationResult<ExecutionState> {
         // Set up EVM environment
-        let env = Env {
-            tx: TxEnv {
+        let ctx = Context::<BlockEnv, TxEnv, CfgEnv, &mut InMemoryDB>::new(
+            db,
+            revm::primitives::hardfork::SpecId::PRAGUE,
+        )
+        .with_block(BlockEnv {
+            number: U256::from(1),
+            timestamp: U256::from(1640995200),
+            gas_limit: self.config.gas_limit,
+            difficulty: U256::from(1),
+            prevrandao: Some(B256::ZERO),
+            basefee: 1_000_000_000u64,
+            ..Default::default()
+        });
+
+        // Create EVM instance
+        let mut evm = ctx.build_mainnet();
+
+        // Execute transaction
+        let result = evm
+            .transact(TxEnv {
                 caller: test_tx.from,
-                transact_to: TransactTo::Call(contract_addr),
+                kind: revm::primitives::TxKind::Call(contract_addr),
                 data: test_tx.data.clone().into(),
                 value: test_tx.value,
                 gas_limit: test_tx.gas_limit,
-                gas_price: U256::from(20_000_000_000u64),
+                gas_price: 20_000_000_000u128,
                 ..Default::default()
-            },
-            block: BlockEnv {
-                number: U256::from(1),
-                timestamp: U256::from(1640995200),
-                gas_limit: U256::from(self.config.gas_limit),
-                difficulty: U256::from(1),
-                prevrandao: Some(B256::ZERO),
-                basefee: U256::from(1_000_000_000u64),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        // Create EVM instance
-        let mut evm = Evm::builder().with_db(db).with_env(Box::new(env)).build();
-
-        // Execute transaction
-        let result = evm.transact().map_err(|e| {
-            VerificationError::EvmExecution(format!("Transaction execution failed: {e:?}"))
-        })?;
+            })
+            .map_err(|e| {
+                VerificationError::EvmExecution(format!("Transaction execution failed: {e:?}"))
+            })?;
 
         // Extract execution details
         let success = result.result.is_success();
@@ -458,14 +453,11 @@ impl PracticalTester {
 impl Database for InMemoryDB {
     type Error = VerificationError;
 
-    fn basic(
-        &mut self,
-        address: Address,
-    ) -> Result<Option<revm::primitives::AccountInfo>, Self::Error> {
+    fn basic(&mut self, address: Address) -> Result<Option<revm::state::AccountInfo>, Self::Error> {
         Ok(self
             .accounts
             .get(&address)
-            .map(|acc| revm::primitives::AccountInfo {
+            .map(|acc| revm::state::AccountInfo {
                 balance: acc.balance,
                 nonce: acc.nonce,
                 code_hash: acc.code_hash,
@@ -487,13 +479,20 @@ impl Database for InMemoryDB {
             .unwrap_or_default())
     }
 
-    fn block_hash(&mut self, number: U256) -> Result<B256, Self::Error> {
+    fn block_hash(&mut self, number: u64) -> Result<B256, Self::Error> {
         Ok(self.block_hashes.get(&number).copied().unwrap_or_default())
     }
 }
 
 impl DatabaseCommit for InMemoryDB {
-    fn commit(&mut self, changes: HashMap<Address, revm::primitives::Account>) {
+    fn commit(
+        &mut self,
+        changes: std::collections::HashMap<
+            revm::primitives::Address,
+            revm::state::Account,
+            revm::primitives::map::foldhash::fast::RandomState,
+        >,
+    ) {
         for (address, account) in changes {
             // Update account info
             let info = account.info;

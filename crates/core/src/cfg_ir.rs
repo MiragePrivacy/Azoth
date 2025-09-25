@@ -210,14 +210,13 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
         );
 
         // 1. Split before a JUMPDEST only if current block is non-empty
-        if instr.opcode == "JUMPDEST" {
-            if let Block::Body {
+        if instr.opcode == "JUMPDEST"
+            && let Block::Body {
                 instructions,
                 start_pc,
                 ..
             } = &cur_block
-            {
-                if !instructions.is_empty() {
+                && !instructions.is_empty() {
                     tracing::debug!(
                         "Splitting before JUMPDEST at pc={}: pushing block with start_pc={}, instructions={:?}",
                         instr.pc,
@@ -233,8 +232,6 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
                         },
                     ));
                 }
-            }
-        }
 
         // 2. Record the opcode
         if let Block::Body { instructions, .. } = &mut cur_block {
@@ -380,11 +377,10 @@ fn build_edges(
     }
 
     // Add edge from Entry to first block, collapsing if let
-    if let Some(Block::Body { start_pc, .. }) = blocks.first() {
-        if let Some(&target) = node_map.get(start_pc) {
+    if let Some(Block::Body { start_pc, .. }) = blocks.first()
+        && let Some(&target) = node_map.get(start_pc) {
             edges.push((NodeIndex::new(0), target, EdgeType::Fallthrough));
         }
-    }
 
     // Build edges with translation through node_map
     for (i, block) in blocks.iter().enumerate() {
@@ -415,33 +411,28 @@ fn build_edges(
             let last_instr = last_instr.unwrap();
             match last_instr.opcode.as_str() {
                 "JUMP" => {
-                    if let Some(imm) = &last_instr.imm {
-                        if let Ok(target_pc) = usize::from_str_radix(imm, 16) {
-                            if let Some(&target) = node_map.get(&target_pc) {
+                    if let Some(imm) = &last_instr.imm
+                        && let Ok(target_pc) = usize::from_str_radix(imm, 16)
+                            && let Some(&target) = node_map.get(&target_pc) {
                                 edges.push((start_idx, target, EdgeType::Jump));
                             }
-                        }
-                    }
                     // Skip fall-through for unconditional jump
                     continue;
                 }
                 "JUMPI" => {
-                    if let Some(imm) = &last_instr.imm {
-                        if let Ok(target_pc) = usize::from_str_radix(imm, 16) {
-                            if let Some(&target) = node_map.get(&target_pc) {
+                    if let Some(imm) = &last_instr.imm
+                        && let Ok(target_pc) = usize::from_str_radix(imm, 16)
+                            && let Some(&target) = node_map.get(&target_pc) {
                                 edges.push((start_idx, target, EdgeType::BranchTrue));
                             }
-                        }
-                    }
-                    if i + 1 < blocks.len() {
-                        if let Block::Body {
+                    if i + 1 < blocks.len()
+                        && let Block::Body {
                             start_pc: next_pc, ..
                         } = &blocks[i + 1]
                         {
                             let next_idx = node_map[next_pc];
                             edges.push((start_idx, next_idx, EdgeType::BranchFalse));
                         }
-                    }
                 }
                 _ if is_terminal_opcode(&last_instr.opcode) => {
                     let exit_idx = NodeIndex::new(cfg.node_count() - 1);
@@ -661,8 +652,8 @@ impl CfgIrBundle {
                     }
                     "JUMPI" => {
                         // Conditional jump - create both true and false branches
-                        if let Some(target_pc) = self.extract_jump_target(instructions) {
-                            if let Some(&target_idx) = self.pc_to_block.get(&target_pc) {
+                        if let Some(target_pc) = self.extract_jump_target(instructions)
+                            && let Some(&target_idx) = self.pc_to_block.get(&target_pc) {
                                 self.cfg
                                     .add_edge(node_idx, target_idx, EdgeType::BranchTrue);
                                 tracing::debug!(
@@ -672,7 +663,6 @@ impl CfgIrBundle {
                                     target_pc
                                 );
                             }
-                        }
 
                         // Add false branch to next sequential block (only if it doesn't already exist)
                         if let Some(next_idx) = self.find_next_sequential_block(node_idx) {
@@ -761,9 +751,8 @@ impl CfgIrBundle {
                     // Look for PUSH followed by JUMP/JUMPI
                     if instructions[i].opcode.starts_with("PUSH")
                         && matches!(instructions[i + 1].opcode.as_str(), "JUMP" | "JUMPI")
-                    {
-                        if let Some(imm) = &instructions[i].imm {
-                            if let Ok(old_target) = usize::from_str_radix(imm, 16) {
+                        && let Some(imm) = &instructions[i].imm
+                            && let Ok(old_target) = usize::from_str_radix(imm, 16) {
                                 // Calculate new target using local logic to avoid borrowing self
                                 let new_target = if let Some(mapping) = pc_mapping {
                                     if let Some(&mapped_target) = mapping.get(&old_target) {
@@ -811,8 +800,6 @@ impl CfgIrBundle {
                                     );
                                 }
                             }
-                        }
-                    }
                 }
             }
         }
@@ -833,11 +820,10 @@ impl CfgIrBundle {
             // Look for preceding PUSH instruction
             if last_idx > 0 {
                 let push_instr = &instructions[last_idx - 1];
-                if push_instr.opcode.starts_with("PUSH") {
-                    if let Some(imm) = &push_instr.imm {
+                if push_instr.opcode.starts_with("PUSH")
+                    && let Some(imm) = &push_instr.imm {
                         return usize::from_str_radix(imm, 16).ok();
                     }
-                }
             }
         }
 
@@ -901,12 +887,11 @@ impl CfgIrBundle {
                     // Look for PUSH followed by JUMP/JUMPI
                     if instructions[i].opcode.starts_with("PUSH")
                         && matches!(instructions[i + 1].opcode.as_str(), "JUMP" | "JUMPI")
-                    {
-                        if let Some(imm) = &instructions[i].imm {
-                            if let Ok(old_target) = usize::from_str_radix(imm, 16) {
+                        && let Some(imm) = &instructions[i].imm
+                            && let Ok(old_target) = usize::from_str_radix(imm, 16) {
                                 // Use pre-collected mapping instead of accessing self.cfg
-                                if let Some(&new_target) = target_mappings.get(&old_target) {
-                                    if new_target != old_target {
+                                if let Some(&new_target) = target_mappings.get(&old_target)
+                                    && new_target != old_target {
                                         // Update the PUSH instruction with new target
                                         let bytes_needed = if new_target == 0 {
                                             1
@@ -929,10 +914,7 @@ impl CfgIrBundle {
                                             new_target
                                         );
                                     }
-                                }
                             }
-                        }
-                    }
                 }
             }
         }
@@ -957,17 +939,13 @@ fn collect_jump_targets(instructions: &[Instruction]) -> Vec<usize> {
     let mut prev_instr: Option<&Instruction> = None;
 
     for instr in instructions {
-        if let Some(prev) = prev_instr {
-            if prev.opcode.starts_with("PUSH") && matches!(instr.opcode.as_str(), "JUMP" | "JUMPI")
-            {
-                if let Some(imm) = &prev.imm {
-                    if let Ok(target_pc) = usize::from_str_radix(imm, 16) {
+        if let Some(prev) = prev_instr
+            && prev.opcode.starts_with("PUSH") && matches!(instr.opcode.as_str(), "JUMP" | "JUMPI")
+                && let Some(imm) = &prev.imm
+                    && let Ok(target_pc) = usize::from_str_radix(imm, 16) {
                         tracing::debug!("Found jump target: pc={}", target_pc);
                         targets.push(target_pc);
                     }
-                }
-            }
-        }
         prev_instr = Some(instr);
     }
 

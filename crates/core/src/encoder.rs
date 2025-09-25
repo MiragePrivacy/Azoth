@@ -61,8 +61,8 @@ pub fn encode_with_original(
                 tracing::warn!("Preserving unknown opcode at pc={}", ins.pc);
 
                 // First try immediate data
-                if let Some(imm) = &ins.imm {
-                    if let Ok(byte_val) = u8::from_str_radix(imm, 16) {
+                if let Some(imm) = &ins.imm
+                    && let Ok(byte_val) = u8::from_str_radix(imm, 16) {
                         bytes.push(byte_val);
                         tracing::debug!(
                             "Preserved unknown opcode from immediate as byte 0x{:02x}",
@@ -70,11 +70,10 @@ pub fn encode_with_original(
                         );
                         continue;
                     }
-                }
 
                 // Then try original bytecode lookup
-                if let Some(original) = original_bytecode {
-                    if ins.pc < original.len() {
+                if let Some(original) = original_bytecode
+                    && ins.pc < original.len() {
                         let byte_val = original[ins.pc];
                         bytes.push(byte_val);
                         tracing::debug!(
@@ -84,7 +83,6 @@ pub fn encode_with_original(
                         );
                         continue;
                     }
-                }
 
                 // Last resort: skip with warning (controversial but prevents total failure)
                 tracing::error!(

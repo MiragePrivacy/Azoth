@@ -210,7 +210,7 @@ async fn test_dominator_computation() {
         "First body block should have a post-dominator"
     );
     assert!(
-        post_doms.get(&second_body).is_none(),
+        !post_doms.contains_key(&second_body),
         "Second body block should have no post-dominator due to potential loop"
     );
     assert_eq!(
@@ -221,7 +221,7 @@ async fn test_dominator_computation() {
 
     // Verify overlap bounds
     assert!(
-        overlap >= 0.0 && overlap <= 1.0,
+        (0.0..=1.0).contains(&overlap),
         "Dominator overlap should be between 0 and 1"
     );
 

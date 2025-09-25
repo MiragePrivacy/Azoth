@@ -61,8 +61,8 @@ pub fn locate_sections(
     tracing::debug!("Auxdata offset: {}", aux_offset);
 
     // Special case: If auxdata starts at offset 0, the entire bytecode is auxdata
-    if aux_offset == 0 {
-        if let Some((offset, len)) = auxdata {
+    if aux_offset == 0
+        && let Some((offset, len)) = auxdata {
             tracing::debug!("Entire bytecode is auxdata: offset={}, len={}", offset, len);
             sections.push(Section {
                 kind: SectionKind::Auxdata,
@@ -71,7 +71,6 @@ pub fn locate_sections(
             });
             return Ok(sections);
         }
-    }
 
     // Pass B: Detect Padding before Auxdata
     let padding = detect_padding(instructions, aux_offset);
@@ -138,8 +137,8 @@ pub fn locate_sections(
     }
 
     // Only push Padding if ConstructorArgs is not present
-    if !has_constructor_args {
-        if let Some((pad_offset, pad_len)) = padding {
+    if !has_constructor_args
+        && let Some((pad_offset, pad_len)) = padding {
             tracing::debug!("Padding detected: offset={}, len={}", pad_offset, pad_len);
             sections.push(Section {
                 kind: SectionKind::Padding,
@@ -147,7 +146,6 @@ pub fn locate_sections(
                 len: pad_len,
             });
         }
-    }
 
     // Pass E: Create sections based on detected boundaries
     if init_end == 0 && runtime_start == 0 {
@@ -246,11 +244,10 @@ fn detect_deployment_fallback(
     aux_offset: usize,
 ) -> Option<(usize, usize)> {
     // Method 1: Look for CODECOPY + RETURN pattern
-    if let Some((init_end, runtime_start)) = detect_codecopy_return_simple(instructions) {
-        if runtime_start < aux_offset {
+    if let Some((init_end, runtime_start)) = detect_codecopy_return_simple(instructions)
+        && runtime_start < aux_offset {
             return Some((init_end, runtime_start));
         }
-    }
 
     // Method 2: Use dispatcher detection on potential runtime segments
     // Look for dispatcher patterns and infer runtime start from them
@@ -303,16 +300,13 @@ fn detect_codecopy_return_simple(instructions: &[Instruction]) -> Option<(usize,
     let mut runtime_start = init_end; // fallback
 
     for i in (0..codecopy_idx).rev().take(10) {
-        if instructions[i].opcode.starts_with("PUSH") {
-            if let Some(imm) = &instructions[i].imm {
-                if let Ok(value) = usize::from_str_radix(imm, 16) {
-                    if value > init_end && value < 100000 {
+        if instructions[i].opcode.starts_with("PUSH")
+            && let Some(imm) = &instructions[i].imm
+                && let Ok(value) = usize::from_str_radix(imm, 16)
+                    && value > init_end && value < 100000 {
                         runtime_start = value;
                         break;
                     }
-                }
-            }
-        }
     }
 
     tracing::debug!(
@@ -502,9 +496,9 @@ fn detect_codecopy_return_pattern(instructions: &[Instruction]) -> Option<(usize
 
     // Look backwards from CODECOPY for PUSH instructions
     for i in (0..codecopy_idx).rev().take(10) {
-        if instructions[i].opcode.starts_with("PUSH") {
-            if let Some(imm) = &instructions[i].imm {
-                if let Ok(value) = usize::from_str_radix(imm, 16) {
+        if instructions[i].opcode.starts_with("PUSH")
+            && let Some(imm) = &instructions[i].imm
+                && let Ok(value) = usize::from_str_radix(imm, 16) {
                     if runtime_len.is_none() && value > 0 && value < 100000 {
                         // First reasonable value could be runtime length
                         runtime_len = Some(value);
@@ -517,8 +511,6 @@ fn detect_codecopy_return_pattern(instructions: &[Instruction]) -> Option<(usize
                         break;
                     }
                 }
-            }
-        }
     }
 
     // If we found CODECOPY + RETURN but can't extract parameters,

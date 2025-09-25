@@ -52,11 +52,10 @@ async fn test_token_dispatcher_obfuscation() {
         };
 
     // Apply obfuscation with deterministic seed to prevent flakiness
-    let mut config = ObfuscationConfig::default();
-
-    config.seed =
+    let config = ObfuscationConfig::with_seed(
         Seed::from_hex("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
-            .unwrap();
+            .unwrap(),
+    );
 
     let result = obfuscate_bytecode(bytecode, config).await.unwrap();
 

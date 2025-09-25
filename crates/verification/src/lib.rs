@@ -18,6 +18,7 @@ pub use formal::proofs::{FormalProof, ProofStatement};
 pub use formal::{FormalVerifier, SecurityProperty};
 pub use orchestrator::VerificationEngine;
 pub use practical::{EquivalenceResults, PracticalTester};
+use revm::context::DBErrorMarker;
 
 /// Main error type for verification operations
 #[derive(thiserror::Error, Debug)]
@@ -49,6 +50,8 @@ pub enum VerificationError {
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 }
+
+impl DBErrorMarker for VerificationError {}
 
 /// Result type for verification operations
 pub type VerificationResult<T> = Result<T, VerificationError>;

@@ -147,7 +147,7 @@ impl SmtSolver {
         }
     }
 
-    fn parse_assertion_content(&self, content: &str) -> VerificationResult<ast::Bool> {
+    fn parse_assertion_content(&self, content: &str) -> VerificationResult<ast::Bool<'_>> {
         let content = content.trim();
 
         // Handle basic patterns
@@ -182,7 +182,7 @@ impl SmtSolver {
         }
     }
 
-    fn parse_equality(&self, content: &str) -> VerificationResult<ast::Bool> {
+    fn parse_equality(&self, content: &str) -> VerificationResult<ast::Bool<'_>> {
         // Simple equality parsing: (= a b)
         if content.len() > 4 {
             let inner = &content[2..content.len() - 1].trim();
@@ -199,7 +199,7 @@ impl SmtSolver {
         }
     }
 
-    fn parse_comparison(&self, content: &str, op: &str) -> VerificationResult<ast::Bool> {
+    fn parse_comparison(&self, content: &str, op: &str) -> VerificationResult<ast::Bool<'_>> {
         let op_len = op.len() + 1; // +1 for opening paren
         if content.len() > op_len + 1 {
             let inner = &content[op_len..content.len() - 1].trim();
@@ -222,17 +222,17 @@ impl SmtSolver {
         }
     }
 
-    fn parse_and(&self, _content: &str) -> VerificationResult<ast::Bool> {
+    fn parse_and(&self, _content: &str) -> VerificationResult<ast::Bool<'_>> {
         // For now, simplified and parsing
         Ok(ast::Bool::from_bool(&self.z3_context, true))
     }
 
-    fn parse_or(&self, _content: &str) -> VerificationResult<ast::Bool> {
+    fn parse_or(&self, _content: &str) -> VerificationResult<ast::Bool<'_>> {
         // For now, simplified or parsing
         Ok(ast::Bool::from_bool(&self.z3_context, true))
     }
 
-    fn parse_not(&self, content: &str) -> VerificationResult<ast::Bool> {
+    fn parse_not(&self, content: &str) -> VerificationResult<ast::Bool<'_>> {
         if content.len() > 5 {
             let inner = &content[4..content.len() - 1].trim();
             let inner_ast = self.parse_assertion_content(inner)?;
@@ -242,7 +242,7 @@ impl SmtSolver {
         }
     }
 
-    fn parse_forall(&self, content: &str) -> VerificationResult<ast::Bool> {
+    fn parse_forall(&self, content: &str) -> VerificationResult<ast::Bool<'_>> {
         let content = content.trim();
         if !content.starts_with("(forall") {
             return Ok(ast::Bool::from_bool(&self.z3_context, true));
@@ -267,7 +267,7 @@ impl SmtSolver {
         }
     }
 
-    fn parse_implies(&self, content: &str) -> VerificationResult<ast::Bool> {
+    fn parse_implies(&self, content: &str) -> VerificationResult<ast::Bool<'_>> {
         // Implication parsing: (=> a b)
         if content.len() > 4 {
             let _inner = &content[3..content.len() - 1].trim();
@@ -278,7 +278,7 @@ impl SmtSolver {
         }
     }
 
-    fn parse_term(&self, term: &str) -> VerificationResult<ast::Dynamic> {
+    fn parse_term(&self, term: &str) -> VerificationResult<ast::Dynamic<'_>> {
         // Try to parse as integer first
         if let Ok(value) = term.parse::<i64>() {
             Ok(ast::Int::from_i64(&self.z3_context, value).into())
@@ -295,7 +295,7 @@ impl SmtSolver {
         }
     }
 
-    fn parse_int_term(&self, term: &str) -> VerificationResult<ast::Int> {
+    fn parse_int_term(&self, term: &str) -> VerificationResult<ast::Int<'_>> {
         if let Ok(value) = term.parse::<i64>() {
             Ok(ast::Int::from_i64(&self.z3_context, value))
         } else if let Some(stripped) = term.strip_prefix("#x") {
