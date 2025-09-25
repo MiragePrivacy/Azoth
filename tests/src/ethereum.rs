@@ -1,4 +1,4 @@
-//! End to end ethereum tests. Requires a local anvil instance running.
+//! End to end ethereum tests.
 //!
 //! Test variations of obfuscation options:
 //!   - Function dispatch only (all options off)
@@ -7,6 +7,7 @@
 //!   - All options enabled
 //!
 //! Each test case should assert that the contract is deployable on the anvil instance
+//! TODO: use a wrapper around alloy transactions to call obfuscated selectors after deploying
 
 use alloy::hex;
 use alloy::node_bindings::{Anvil, AnvilInstance};
