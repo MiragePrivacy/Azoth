@@ -20,7 +20,7 @@ async fn test_token_dispatcher_obfuscation() {
     println!("Input bytecode: {}", bytecode);
 
     // Analyze original bytecode
-    let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+    let (instructions, _, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
 
     println!("\nOriginal dispatcher structure:");
     for (i, instr) in instructions.iter().enumerate() {
@@ -82,7 +82,7 @@ async fn test_token_dispatcher_obfuscation() {
     );
 
     // Decode obfuscated bytecode
-    let (obfuscated_instructions, _, _) =
+    let (obfuscated_instructions, _, _, _) =
         decoder::decode_bytecode(&result.obfuscated_bytecode, false)
             .await
             .unwrap();

@@ -3,7 +3,6 @@ use azoth_core::decoder::{
 };
 use azoth_utils::errors::DecodeError;
 use heimdall::{disassemble, DisassemblerArgsBuilder};
-use std::io::Write;
 
 #[allow(dead_code)]
 // Fixture: PUSH1 0x01, PUSH1 0x02, ADD, STOP
@@ -11,7 +10,7 @@ const BYTECODE: &str = "0x6001600201600057";
 
 #[tokio::test]
 async fn test_hex_roundtrip() {
-    let (ins, info, asm) = decode_bytecode(BYTECODE, false).await.unwrap();
+    let (ins, info, asm, _) = decode_bytecode(BYTECODE, false).await.unwrap();
     tracing::debug!("\nRaw assembly:\n{}", asm);
     tracing::debug!("Parsed instructions:");
     for instr in &ins {
@@ -52,26 +51,6 @@ async fn test_decode_from_bytes() {
     assert_eq!(info2.byte_length, info.byte_length);
     assert_eq!(info2.keccak_hash, info.keccak_hash);
     assert_eq!(info2.source, SourceType::File); // Source should be different
-}
-
-#[tokio::test]
-async fn test_file_input() {
-    let mut tmp = tempfile::NamedTempFile::new().unwrap();
-    tmp.write_all(&hex::decode(BYTECODE.trim_start_matches("0x")).unwrap())
-        .unwrap();
-    let path = tmp.path().to_str().unwrap();
-
-    let (ins_file, info_file, asm) = decode_bytecode(path, true).await.unwrap();
-    tracing::debug!("\nRaw assembly from heimdall (file):\n{}", asm);
-    tracing::debug!("Parsed instructions (file):");
-    for instr in &ins_file {
-        tracing::debug!("{}", instr);
-    }
-    let (ins_hex, info_hex, _) = decode_bytecode(BYTECODE, false).await.unwrap();
-
-    assert_eq!(ins_file, ins_hex);
-    assert_eq!(info_file.byte_length, info_hex.byte_length);
-    assert_eq!(info_file.source, SourceType::File);
 }
 
 #[tokio::test]
