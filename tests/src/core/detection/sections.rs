@@ -22,8 +22,7 @@ async fn test_full_deploy_payload_properties() {
         "a165627a7a723058"  // Auxdata (simplified CBOR: "bzzr0X")
     );
 
-    let (instructions, info, _) = decode_bytecode(bytecode, false).await.unwrap();
-    let bytes = hex::decode(bytecode.trim_start_matches("0x")).unwrap();
+    let (instructions, info, _, bytes) = decode_bytecode(bytecode, false).await.unwrap();
 
     tracing::debug!("Full deploy bytecode: {:?}", bytes);
     tracing::debug!("Instructions: {:?}", instructions);

@@ -96,18 +96,15 @@ pub async fn obfuscate_bytecode(
     input_bytecode: &str,
     config: ObfuscationConfig,
 ) -> Result<ObfuscationResult, Box<dyn std::error::Error + Send + Sync>> {
-    // Step 1: Normalize and decode input
-    let bytecode_hex = input_bytecode.trim_start_matches("0x");
-    let bytes = hex::decode(bytecode_hex)?;
-    let original_size = bytes.len();
-
     tracing::debug!("Starting obfuscation pipeline:");
-    tracing::debug!("  Input size: {} bytes", original_size);
     tracing::debug!("  User transforms: {}", config.transforms.len());
 
-    // Process bytecode to CFG-IR using the helper
-    let input = format!("0x{bytecode_hex}");
-    let (mut cfg_ir, instructions, sections, _) = process_bytecode_to_cfg(&input, false).await?;
+    // Step 1: Process bytecode to CFG-IR
+    let (mut cfg_ir, instructions, sections, bytes) =
+        process_bytecode_to_cfg(input_bytecode, false).await?;
+    let original_size = bytes.len();
+
+    tracing::debug!("  Input size: {} bytes", original_size);
 
     // Step 2: Analyze instructions for unknown opcodes
     let (total_instructions, unknown_count, unknown_types) = analyze_instructions(&instructions);

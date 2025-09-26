@@ -78,11 +78,8 @@ pub async fn process_bytecode_to_cfg(
     ),
     Box<dyn std::error::Error + Send + Sync>,
 > {
-    // Decode bytecode
-    let (instructions, _, _) = decoder::decode_bytecode(bytecode, is_file).await?;
-
-    // Convert to bytes
-    let bytes = hex::decode(bytecode.trim_start_matches("0x"))?;
+    // Decode bytecode - this now returns the bytes directly, no redundant parsing
+    let (instructions, _, _, bytes) = decoder::decode_bytecode(bytecode, is_file).await?;
 
     // Detect sections
     let sections = detection::locate_sections(&bytes, &instructions)?;

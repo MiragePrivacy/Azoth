@@ -285,7 +285,7 @@ pub async fn extract_semantics_from_bytecode(
         bytecode.len()
     );
 
-    let (instructions, _, _) =
+    let (instructions, _, _, _) =
         decoder::decode_bytecode(&format!("0x{}", hex::encode(bytecode)), false)
             .await
             .map_err(|e| {

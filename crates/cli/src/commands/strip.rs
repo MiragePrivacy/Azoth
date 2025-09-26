@@ -4,7 +4,7 @@
 /// auxdata), and outputs either the cleaned runtime bytecode as a hex string or a JSON report
 /// detailing the stripping process.
 use async_trait::async_trait;
-use azoth_core::decoder::{decode_bytecode, input_to_bytes};
+use azoth_core::decoder::decode_bytecode;
 use azoth_core::detection::locate_sections;
 use azoth_core::strip::strip_bytecode;
 use clap::Args;
@@ -27,8 +27,7 @@ pub struct StripArgs {
 impl super::Command for StripArgs {
     async fn execute(self) -> Result<(), Box<dyn Error>> {
         let is_file = !self.input.starts_with("0x") && Path::new(&self.input).is_file();
-        let bytes = input_to_bytes(&self.input, is_file)?;
-        let (instructions, _, _) = decode_bytecode(&self.input, is_file).await?;
+        let (instructions, _, _, bytes) = decode_bytecode(&self.input, is_file).await?;
         let sections = locate_sections(&bytes, &instructions)?;
         let (clean_runtime, report) = strip_bytecode(&bytes, &sections)?;
 
