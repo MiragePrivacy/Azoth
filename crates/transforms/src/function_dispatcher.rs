@@ -1,7 +1,7 @@
 use crate::{PassConfig, Transform};
 use azoth_core::cfg_ir::{Block, CfgIrBundle};
 use azoth_core::decoder::Instruction;
-use azoth_core::detection::{detect_function_dispatcher, FunctionSelector};
+use azoth_core::detection::{detect_function_dispatcher, DispatcherInfo, FunctionSelector};
 use azoth_core::Opcode;
 use azoth_utils::errors::TransformError;
 use rand::{rngs::StdRng, Rng};
@@ -16,11 +16,26 @@ use tracing::debug;
 /// to ensure PC integrity is maintained across the transformation pipeline.
 pub struct FunctionDispatcher {
     config: PassConfig,
+    /// pre-detected dispatcher info
+    cached_dispatcher: Option<DispatcherInfo>,
 }
 
 impl FunctionDispatcher {
     pub fn new(config: PassConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            cached_dispatcher: None,
+        }
+    }
+
+    /// Creates a new FunctionDispatcher with pre-detected dispatcher information.
+    /// This avoids redundant dispatcher detection when the obfuscator has already
+    /// identified the dispatcher pattern.
+    pub fn with_dispatcher_info(config: PassConfig, dispatcher_info: DispatcherInfo) -> Self {
+        Self {
+            config,
+            cached_dispatcher: Some(dispatcher_info),
+        }
     }
 
     /// Derives a cryptographically secure token from selector using keyed hash
@@ -481,23 +496,35 @@ impl Transform for FunctionDispatcher {
             runtime_start, runtime_end
         );
 
-        // Collect instructions from blocks within the runtime section
+        // Collect blocks from the runtime section and sort by PC to maintain correct order
+        let mut runtime_blocks: Vec<_> = ir
+            .cfg
+            .node_indices()
+            .filter_map(|node_idx| {
+                if let Block::Body {
+                    instructions,
+                    start_pc,
+                    ..
+                } = &ir.cfg[node_idx]
+                {
+                    if *start_pc >= runtime_start && *start_pc < runtime_end {
+                        return Some((node_idx, *start_pc, instructions.clone()));
+                    }
+                }
+                None
+            })
+            .collect();
+
+        // Sort by start_pc to ensure instructions are in correct linear order
+        runtime_blocks.sort_by_key(|(_, start_pc, _)| *start_pc);
+
+        // Now collect instructions in PC order
         let mut all_instructions = Vec::new();
         let mut block_boundaries = Vec::new();
 
-        for node_idx in ir.cfg.node_indices() {
-            if let Block::Body {
-                instructions,
-                start_pc,
-                ..
-            } = &ir.cfg[node_idx]
-            {
-                // Only include blocks within runtime section
-                if *start_pc >= runtime_start && *start_pc < runtime_end {
-                    block_boundaries.push((node_idx, all_instructions.len(), *start_pc));
-                    all_instructions.extend(instructions.clone());
-                }
-            }
+        for (node_idx, start_pc, instructions) in runtime_blocks {
+            block_boundaries.push((node_idx, all_instructions.len(), start_pc));
+            all_instructions.extend(instructions);
         }
 
         debug!(
@@ -506,8 +533,22 @@ impl Transform for FunctionDispatcher {
             block_boundaries.len()
         );
 
-        // Detect any dispatcher pattern
-        if let Some((start, end, selectors)) = self.detect_dispatcher(&all_instructions) {
+        // Use cached dispatcher info if available, otherwise detect
+        let dispatcher_result = if let Some(ref cached) = self.cached_dispatcher {
+            debug!(
+                "Using pre-detected dispatcher info: {} selectors",
+                cached.selectors.len()
+            );
+            Some((
+                cached.start_offset,
+                cached.end_offset,
+                cached.selectors.clone(),
+            ))
+        } else {
+            self.detect_dispatcher(&all_instructions)
+        };
+
+        if let Some((start, end, selectors)) = dispatcher_result {
             debug!(
                 "Found dispatcher at offset {}..{} with {} selectors",
                 start,
@@ -515,74 +556,120 @@ impl Transform for FunctionDispatcher {
                 selectors.len()
             );
 
-            debug!("Validating dispatcher targets against CFG...");
+            // Infer the base address from JUMPDESTs using a voting algorithm.
+            // For each (target, jumpdest) pair, vote for base = jumpdest - target.
+            // Pick the base with maximum votes (ideally full coverage).
+            // NOTE: base can be LESS than runtime_start (e.g., 0x23A < 0x241 is valid).
+
+            // Step 1: Collect all JUMPDEST PCs from runtime instructions
+            let jumpdests: HashSet<u32> = all_instructions
+                .iter()
+                .filter(|ins| ins.opcode == "JUMPDEST")
+                .map(|ins| ins.pc as u32)
+                .collect();
+
+            debug!("Found {} JUMPDESTs in runtime", jumpdests.len());
+
+            // Step 2: Extract targets from selectors
+            let targets: Vec<u32> = selectors.iter().map(|s| s.target_address as u32).collect();
+
             debug!(
-                "Targets are in deployed bytecode coordinates, adjusting by runtime offset +{:#x}",
-                runtime_start
+                "Dispatcher has {} targets: {:x?}",
+                targets.len(),
+                &targets[..targets.len().min(5)]
             );
 
-            let mut validated_selectors = Vec::new();
-            let mut validation_failures = Vec::new();
-
-            for selector_info in selectors {
-                // Target addresses are in deployed bytecode coordinates (PC 0 = start of runtime)
-                // CFG uses original bytecode PCs, so we need to add the runtime offset
-                let deployed_target = selector_info.target_address as usize;
-                let original_target_pc = runtime_start + deployed_target;
-
-                // Check if target is a valid block start in original PC space
-                if let Some(&block_idx) = ir.pc_to_block.get(&original_target_pc) {
-                    if let Block::Body {
-                        instructions,
-                        start_pc,
-                        ..
-                    } = &ir.cfg[block_idx]
-                    {
-                        // Verify block starts with JUMPDEST at the correct PC
-                        if let Some(first_instr) = instructions.first() {
-                            if first_instr.opcode == "JUMPDEST" && *start_pc == original_target_pc {
-                                validated_selectors.push(selector_info.clone());
-                                debug!(
-                                    "  ✓ Selector 0x{:08x} -> 0x{:x} (original PC: 0x{:x}, block {}, JUMPDEST)",
-                                    selector_info.selector,
-                                    deployed_target,
-                                    original_target_pc,
-                                    block_idx.index()
-                                );
-                                continue;
-                            }
+            // Step 3: Vote for base = jumpdest - target
+            let mut votes: HashMap<u32, usize> = HashMap::new();
+            for &target in &targets {
+                for &jd in &jumpdests {
+                    if jd >= target {
+                        let base_candidate = jd - target;
+                        // Sanity window: base should be reasonable (0 for runtime-only, or typical range)
+                        // Allow 0 for runtime-only bytecode where targets are already absolute
+                        if base_candidate == 0 || (0x80..=0x1000).contains(&base_candidate) {
+                            *votes.entry(base_candidate).or_default() += 1;
                         }
                     }
                 }
-
-                // Target failed validation
-                validation_failures.push((
-                    selector_info.selector,
-                    deployed_target,
-                    format!(
-                        "invalid block start (original PC: 0x{:x})",
-                        original_target_pc
-                    ),
-                ));
-                debug!(
-                    "  ✗ Selector 0x{:08x} -> 0x{:x} (original PC: 0x{:x}, invalid block start)",
-                    selector_info.selector, deployed_target, original_target_pc
-                );
             }
 
-            if !validation_failures.is_empty() {
-                let failures_summary: Vec<_> = validation_failures
-                    .iter()
-                    .map(|(sel, pc, reason)| format!("0x{:08x}->0x{:x} ({})", sel, pc, reason))
-                    .collect();
+            // Step 4: Pick the base with most votes
+            let (&best_base, &vote_count) = votes
+                .iter()
+                .max_by_key(|(_, &count)| count)
+                .ok_or_else(|| {
+                    TransformError::Generic(
+                        "dispatcher: no valid base candidates found from JUMPDEST voting".into(),
+                    )
+                })?;
 
+            debug!(
+                "Best base from voting: {:#x} with {} votes (runtime_start={:#x})",
+                best_base, vote_count, runtime_start
+            );
+
+            // Step 5: Validate full coverage (all targets must map to JUMPDESTs)
+            let mut validated_selectors = Vec::new();
+            let mut failed = Vec::new();
+
+            for (i, selector_info) in selectors.iter().enumerate() {
+                let target = selector_info.target_address as u32;
+                let absolute_pc = best_base + target;
+                let is_jumpdest = jumpdests.contains(&absolute_pc);
+
+                if is_jumpdest {
+                    validated_selectors.push(selector_info.clone());
+                    if i < 5 {
+                        debug!(
+                            "  t{}: sel=0x{:08x} off=0x{:x} -> abs=0x{:x} JD=true",
+                            i, selector_info.selector, target, absolute_pc
+                        );
+                    }
+                } else {
+                    failed.push((selector_info.selector, target, absolute_pc));
+                    debug!(
+                        "  t{}: sel=0x{:08x} off=0x{:x} -> abs=0x{:x} JD=FALSE",
+                        i, selector_info.selector, target, absolute_pc
+                    );
+                }
+            }
+
+            debug!(
+                "Validation: {}/{} targets map to JUMPDESTs",
+                validated_selectors.len(),
+                selectors.len()
+            );
+
+            // Step 6: Require full coverage
+            if !failed.is_empty() {
+                let failures_summary: Vec<_> = failed
+                    .iter()
+                    .map(|(sel, t, abs)| format!("0x{:08x}->0x{:x} (abs: 0x{:x})", sel, t, abs))
+                    .collect();
                 return Err(TransformError::Generic(format!(
-                    "Dispatcher validation failed: {} of {} targets are not valid block starts. \
-                     Failed: [{}]. This indicates CFG construction issues.",
-                    validation_failures.len(),
-                    validated_selectors.len() + validation_failures.len(),
+                    "dispatcher: base {:#x} doesn't achieve full coverage. Failed targets: [{}]",
+                    best_base,
                     failures_summary.join(", ")
                 )));
+            }
+
+            let base = best_base as usize;
+
+            debug!("Validating dispatcher targets against CFG...");
+            debug!(
+                "Targets are in deployed bytecode coordinates, using validated base +{:#x}",
+                base
+            );
+
+            // Log all validated selectors
+            for selector_info in &validated_selectors {
+                let deployed_target = selector_info.target_address as usize;
+                let original_target_pc = base + deployed_target;
+                debug!(
+                    "  ✓ Selector 0x{:08x} -> 0x{:x} (original PC: 0x{:x})",
+                    selector_info.selector, deployed_target, original_target_pc
+                );
             }
 
             debug!(

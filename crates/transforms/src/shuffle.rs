@@ -1,7 +1,6 @@
 use crate::Transform;
 use azoth_core::cfg_ir::{Block, CfgIrBundle};
 use azoth_core::decoder::Instruction;
-use azoth_core::encoder;
 use azoth_core::Opcode;
 use azoth_utils::errors::TransformError;
 use rand::{rngs::StdRng, seq::SliceRandom};
@@ -71,9 +70,7 @@ impl Transform for Shuffle {
             }
         }
 
-        let new_bytecode = encoder::encode(&new_instrs)
-            .map_err(|e| TransformError::EncodingError(e.to_string()))?;
-        ir.replace_body(new_instrs, &[], new_bytecode)?;
+        ir.replace_body(new_instrs, &[])?;
         Ok(true)
     }
 }

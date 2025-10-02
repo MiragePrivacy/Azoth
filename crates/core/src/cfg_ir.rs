@@ -1,3 +1,4 @@
+use crate::Opcode;
 /// Module for constructing a Control Flow Graph (CFG) with Intermediate Representation (IR)
 /// in Static Single Assignment (SSA) form for EVM bytecode analysis.
 ///
@@ -14,6 +15,7 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 
 /// Represents a node in the Control Flow Graph (CFG).
 ///
@@ -92,7 +94,6 @@ pub struct CfgIrBundle {
 /// # Arguments
 /// * `instructions` - Decoded EVM instructions from `decoder.rs`.
 /// * `sections` - Detected sections from `detection.rs`.
-/// * `bytecode` - Raw bytecode bytes.
 /// * `clean_report` - Report from `strip.rs` for reassembly.
 ///
 /// # Returns
@@ -107,7 +108,6 @@ pub struct CfgIrBundle {
 pub fn build_cfg_ir(
     instructions: &[Instruction],
     sections: &[Section],
-    bytecode: &[u8],
     clean_report: crate::strip::CleanReport,
 ) -> Result<CfgIrBundle, CfgIrError> {
     tracing::debug!(
@@ -116,7 +116,7 @@ pub fn build_cfg_ir(
     );
 
     // Step 1: Block splitter
-    let blocks = split_blocks(instructions, bytecode)?;
+    let blocks = split_blocks(instructions)?;
     tracing::debug!("Split into {} blocks", blocks.len());
 
     // Step 2: Edge builder
@@ -146,10 +146,10 @@ pub fn build_cfg_ir(
 }
 
 impl CfgIrBundle {
-    /// Replaces the body of the CFG with new bytecode, rebuilding the CFG and PC mapping.
+    /// Replaces the body of the CFG with new instructions, rebuilding the CFG and PC mapping.
     ///
     /// # Arguments
-    /// * `new_bytecode` - The new bytecode to process.
+    /// * `instructions` - The new instructions to process.
     /// * `sections` - Detected sections for the new bytecode.
     ///
     /// # Returns
@@ -158,11 +158,10 @@ impl CfgIrBundle {
         &mut self,
         instructions: Vec<Instruction>,
         sections: &[Section],
-        new_bytecode: Vec<u8>,
     ) -> Result<(), CfgIrError> {
         let clean_report = self.clean_report.clone();
         let selector_mapping = self.selector_mapping.clone(); // Preserve mapping
-        let new_bundle = build_cfg_ir(&instructions, sections, &new_bytecode, clean_report)?;
+        let new_bundle = build_cfg_ir(&instructions, sections, clean_report)?;
 
         self.cfg = new_bundle.cfg;
         self.pc_to_block = new_bundle.pc_to_block;
@@ -174,7 +173,7 @@ impl CfgIrBundle {
     }
 }
 
-fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Block>, CfgIrError> {
+fn split_blocks(instructions: &[Instruction]) -> Result<Vec<Block>, CfgIrError> {
     let mut blocks = Vec::new();
     let mut cur_block = Block::Body {
         start_pc: 0,
@@ -185,7 +184,7 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
     // Collect all JUMPDEST locations from bytecode
     let jumpdest_pcs: HashSet<usize> = instructions
         .iter()
-        .filter(|i| i.opcode == "JUMPDEST")
+        .filter(|i| matches!(Opcode::from_str(&i.opcode), Ok(Opcode::JUMPDEST)))
         .map(|i| i.pc)
         .collect();
 
@@ -196,22 +195,32 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
     );
 
     for instr in instructions {
+        let opcode = match Opcode::from_str(&instr.opcode) {
+            Ok(op) => op,
+            Err(_) => {
+                // Unknown opcode, add to current block and continue
+                if let Block::Body { instructions, .. } = &mut cur_block {
+                    instructions.push(instr.clone());
+                }
+                continue;
+            }
+        };
+
         // always start new block at JUMPDEST, even if current is empty
-        if instr.opcode == "JUMPDEST" {
+        if matches!(opcode, Opcode::JUMPDEST) {
             if let Block::Body {
                 instructions,
                 start_pc,
                 ..
             } = &cur_block
+                && !instructions.is_empty()
             {
-                if !instructions.is_empty() {
-                    tracing::debug!(
-                        "Sealing block before JUMPDEST at pc={:#x} (prev block start={:#x})",
-                        instr.pc,
-                        start_pc
-                    );
-                    blocks.push(std::mem::take(&mut cur_block));
-                }
+                tracing::debug!(
+                    "Sealing block before JUMPDEST at pc={:#x} (prev block start={:#x})",
+                    instr.pc,
+                    start_pc
+                );
+                blocks.push(std::mem::take(&mut cur_block));
             }
 
             // Start fresh block AT the JUMPDEST PC
@@ -231,7 +240,7 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
         }
 
         // terminate both JUMP and JUMPI end blocks
-        let is_branch = instr.opcode == "JUMP" || instr.opcode == "JUMPI";
+        let is_branch = matches!(opcode, Opcode::JUMP | Opcode::JUMPI);
         let is_terminal = is_terminal_opcode(&instr.opcode);
 
         if is_branch || is_terminal {
@@ -258,14 +267,14 @@ fn split_blocks(instructions: &[Instruction], bytecode: &[u8]) -> Result<Vec<Blo
     }
 
     // Push trailing non-empty block
-    if let Block::Body { instructions, .. } = &cur_block {
-        if !instructions.is_empty() {
-            tracing::debug!(
-                "Pushing trailing block with {} instructions",
-                instructions.len()
-            );
-            blocks.push(cur_block);
-        }
+    if let Block::Body { instructions, .. } = &cur_block
+        && !instructions.is_empty()
+    {
+        tracing::debug!(
+            "Pushing trailing block with {} instructions",
+            instructions.len()
+        );
+        blocks.push(cur_block);
     }
 
     // CANONICALIZATION: verify every JUMPDEST is a block start
@@ -360,10 +369,10 @@ fn build_edges(
     }
 
     // Edge from Entry to first block
-    if let Some(Block::Body { start_pc, .. }) = blocks.first() {
-        if let Some(&target) = node_map.get(start_pc) {
-            edges.push((NodeIndex::new(0), target, EdgeType::Fallthrough));
-        }
+    if let Some(Block::Body { start_pc, .. }) = blocks.first()
+        && let Some(&target) = node_map.get(start_pc)
+    {
+        edges.push((NodeIndex::new(0), target, EdgeType::Fallthrough));
     }
 
     // Build edges using proper jump target extraction
@@ -378,22 +387,22 @@ fn build_edges(
 
             if instructions.is_empty() {
                 // Empty block (shouldn't happen after our fixes, but handle it)
-                if i + 1 < blocks.len() {
-                    if let Block::Body {
+                if i + 1 < blocks.len()
+                    && let Block::Body {
                         start_pc: next_pc, ..
                     } = &blocks[i + 1]
-                    {
-                        let next_idx = node_map[next_pc];
-                        edges.push((start_idx, next_idx, EdgeType::Fallthrough));
-                    }
+                {
+                    let next_idx = node_map[next_pc];
+                    edges.push((start_idx, next_idx, EdgeType::Fallthrough));
                 }
                 continue;
             }
 
             let last_instr = &instructions[instructions.len() - 1];
 
-            match last_instr.opcode.as_str() {
-                "JUMP" => {
+            let last_opcode = Opcode::from_str(&last_instr.opcode).ok();
+            match last_opcode {
+                Some(Opcode::JUMP) => {
                     // C) Extract target from [PUSHx imm][JUMP] pattern
                     if let Some(target_pc) = extract_jump_target_from_block(instructions) {
                         if let Some(&target_idx) = node_map.get(&target_pc) {
@@ -416,34 +425,33 @@ fn build_edges(
                     // No fallthrough for unconditional jump
                     continue;
                 }
-                "JUMPI" => {
+                Some(Opcode::JUMPI) => {
                     // C) Extract target from [PUSHx imm][JUMPI] pattern
-                    if let Some(target_pc) = extract_jump_target_from_block(instructions) {
-                        if let Some(&target_idx) = node_map.get(&target_pc) {
-                            edges.push((start_idx, target_idx, EdgeType::BranchTrue));
-                            tracing::debug!(
-                                "JUMPI true edge: block {} -> block {} (target={:#x})",
-                                start_idx.index(),
-                                target_idx.index(),
-                                target_pc
-                            );
-                        }
+                    if let Some(target_pc) = extract_jump_target_from_block(instructions)
+                        && let Some(&target_idx) = node_map.get(&target_pc)
+                    {
+                        edges.push((start_idx, target_idx, EdgeType::BranchTrue));
+                        tracing::debug!(
+                            "JUMPI true edge: block {} -> block {} (target={:#x})",
+                            start_idx.index(),
+                            target_idx.index(),
+                            target_pc
+                        );
                     }
 
                     // False branch: next sequential block
-                    if i + 1 < blocks.len() {
-                        if let Block::Body {
+                    if i + 1 < blocks.len()
+                        && let Block::Body {
                             start_pc: next_pc, ..
                         } = &blocks[i + 1]
-                        {
-                            let next_idx = node_map[next_pc];
-                            edges.push((start_idx, next_idx, EdgeType::BranchFalse));
-                            tracing::debug!(
-                                "JUMPI false edge: block {} -> block {}",
-                                start_idx.index(),
-                                next_idx.index()
-                            );
-                        }
+                    {
+                        let next_idx = node_map[next_pc];
+                        edges.push((start_idx, next_idx, EdgeType::BranchFalse));
+                        tracing::debug!(
+                            "JUMPI false edge: block {} -> block {}",
+                            start_idx.index(),
+                            next_idx.index()
+                        );
                     }
                 }
                 _ if is_terminal_opcode(&last_instr.opcode) => {
@@ -481,16 +489,18 @@ fn extract_jump_target_from_block(instructions: &[Instruction]) -> Option<usize>
     let last_idx = instructions.len() - 1;
     let jump_instr = &instructions[last_idx];
 
-    if !matches!(jump_instr.opcode.as_str(), "JUMP" | "JUMPI") {
+    let jump_opcode = Opcode::from_str(&jump_instr.opcode).ok()?;
+    if !matches!(jump_opcode, Opcode::JUMP | Opcode::JUMPI) {
         return None;
     }
 
     // Look for preceding PUSH
     let push_instr = &instructions[last_idx - 1];
-    if push_instr.opcode.starts_with("PUSH") {
-        if let Some(imm) = &push_instr.imm {
-            return usize::from_str_radix(imm, 16).ok();
-        }
+    let push_opcode = Opcode::from_str(&push_instr.opcode).ok()?;
+    if matches!(push_opcode, Opcode::PUSH(_) | Opcode::PUSH0)
+        && let Some(imm) = &push_instr.imm
+    {
+        return usize::from_str_radix(imm, 16).ok();
     }
 
     None
@@ -526,15 +536,17 @@ fn assign_ssa_values(
         if let Block::Body { instructions, .. } = block {
             for instr in instructions {
                 tracing::debug!("Processing opcode {} at pc={}", instr.opcode, instr.pc);
-                if instr.opcode.starts_with("PUSH") || instr.opcode.starts_with("DUP") {
-                    cur_depth += 1;
-                } else if instr.opcode == "POP" && stack.pop().is_some() {
-                    cur_depth = cur_depth.saturating_sub(1);
-                }
-                if instr.opcode.starts_with("PUSH") {
-                    stack.push(ValueId(value_id));
-                    ssa_map.insert(instr.pc, ValueId(value_id));
-                    value_id += 1;
+                if let Ok(opcode) = Opcode::from_str(&instr.opcode) {
+                    if matches!(opcode, Opcode::PUSH(_) | Opcode::PUSH0 | Opcode::DUP(_)) {
+                        cur_depth += 1;
+                    } else if matches!(opcode, Opcode::POP) && stack.pop().is_some() {
+                        cur_depth = cur_depth.saturating_sub(1);
+                    }
+                    if matches!(opcode, Opcode::PUSH(_) | Opcode::PUSH0) {
+                        stack.push(ValueId(value_id));
+                        ssa_map.insert(instr.pc, ValueId(value_id));
+                        value_id += 1;
+                    }
                 }
                 max_stack = max_stack.max(cur_depth);
             }
@@ -667,8 +679,9 @@ impl CfgIrBundle {
             let last_instr = instructions.last();
 
             if let Some(last_instr) = last_instr {
-                match last_instr.opcode.as_str() {
-                    "JUMP" => {
+                let last_opcode = Opcode::from_str(&last_instr.opcode).ok();
+                match last_opcode {
+                    Some(Opcode::JUMP) => {
                         // Unconditional jump - find target and create Jump edge
                         if let Some(target_pc) = self.extract_jump_target(instructions) {
                             if let Some(&target_idx) = self.pc_to_block.get(&target_pc) {
@@ -687,7 +700,7 @@ impl CfgIrBundle {
                             }
                         }
                     }
-                    "JUMPI" => {
+                    Some(Opcode::JUMPI) => {
                         // Conditional jump - create both true and false branches
                         if let Some(target_pc) = self.extract_jump_target(instructions)
                             && let Some(&target_idx) = self.pc_to_block.get(&target_pc)
@@ -787,8 +800,10 @@ impl CfgIrBundle {
             if let Block::Body { instructions, .. } = &mut self.cfg[node_idx] {
                 for i in 0..instructions.len().saturating_sub(1) {
                     // Look for PUSH followed by JUMP/JUMPI
-                    if instructions[i].opcode.starts_with("PUSH")
-                        && matches!(instructions[i + 1].opcode.as_str(), "JUMP" | "JUMPI")
+                    let push_opcode = Opcode::from_str(&instructions[i].opcode).ok();
+                    let next_opcode = Opcode::from_str(&instructions[i + 1].opcode).ok();
+                    if matches!(push_opcode, Some(Opcode::PUSH(_) | Opcode::PUSH0))
+                        && matches!(next_opcode, Some(Opcode::JUMP | Opcode::JUMPI))
                         && let Some(imm) = &instructions[i].imm
                         && let Ok(old_target) = usize::from_str_radix(imm, 16)
                     {
@@ -851,11 +866,13 @@ impl CfgIrBundle {
         let last_idx = instructions.len() - 1;
         let jump_instr = &instructions[last_idx];
 
-        if matches!(jump_instr.opcode.as_str(), "JUMP" | "JUMPI") {
+        let jump_opcode = Opcode::from_str(&jump_instr.opcode).ok()?;
+        if matches!(jump_opcode, Opcode::JUMP | Opcode::JUMPI) {
             // Look for preceding PUSH instruction
             if last_idx > 0 {
                 let push_instr = &instructions[last_idx - 1];
-                if push_instr.opcode.starts_with("PUSH")
+                let push_opcode = Opcode::from_str(&push_instr.opcode).ok()?;
+                if matches!(push_opcode, Opcode::PUSH(_) | Opcode::PUSH0)
                     && let Some(imm) = &push_instr.imm
                 {
                     return usize::from_str_radix(imm, 16).ok();
@@ -921,8 +938,10 @@ impl CfgIrBundle {
             if let Block::Body { instructions, .. } = &mut self.cfg[node_idx] {
                 for i in 0..instructions.len().saturating_sub(1) {
                     // Look for PUSH followed by JUMP/JUMPI
-                    if instructions[i].opcode.starts_with("PUSH")
-                        && matches!(instructions[i + 1].opcode.as_str(), "JUMP" | "JUMPI")
+                    let push_opcode = Opcode::from_str(&instructions[i].opcode).ok();
+                    let next_opcode = Opcode::from_str(&instructions[i + 1].opcode).ok();
+                    if matches!(push_opcode, Some(Opcode::PUSH(_) | Opcode::PUSH0))
+                        && matches!(next_opcode, Some(Opcode::JUMP | Opcode::JUMPI))
                         && let Some(imm) = &instructions[i].imm
                         && let Ok(old_target) = usize::from_str_radix(imm, 16)
                     {

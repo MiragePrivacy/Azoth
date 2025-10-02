@@ -141,7 +141,7 @@ pub async fn obfuscate_bytecode(
         .iter()
         .find(|s| s.kind == detection::SectionKind::Runtime);
 
-    let has_runtime_dispatcher = if let Some(runtime_sec) = runtime_section {
+    let dispatcher_info = if let Some(runtime_sec) = runtime_section {
         // Filter instructions to only those in runtime section
         let runtime_instructions: Vec<_> = instructions
             .iter()
@@ -155,19 +155,23 @@ pub async fn obfuscate_bytecode(
             "Checking for dispatcher in {} runtime instructions",
             runtime_instructions.len()
         );
-        detection::has_dispatcher(&runtime_instructions)
+        detection::detect_function_dispatcher(&runtime_instructions)
     } else {
         // No runtime section = probably pure runtime bytecode
-        detection::has_dispatcher(&instructions)
+        detection::detect_function_dispatcher(&instructions)
     };
 
-    if has_runtime_dispatcher {
-        all_transforms.push(Box::new(FunctionDispatcher::new(
-            config.pass_config.clone(),
-        )));
+    let has_dispatcher = dispatcher_info.is_some();
+
+    if let Some(dispatcher) = dispatcher_info {
         tracing::debug!(
-            "Function dispatcher detected in runtime - adding FunctionDispatcher transform"
+            "Function dispatcher detected with {} selectors - adding FunctionDispatcher transform",
+            dispatcher.selectors.len()
         );
+        all_transforms.push(Box::new(FunctionDispatcher::with_dispatcher_info(
+            config.pass_config.clone(),
+            dispatcher,
+        )));
     } else {
         tracing::debug!(
             "No function dispatcher detected in runtime - skipping FunctionDispatcher transform"
@@ -185,12 +189,12 @@ pub async fn obfuscate_bytecode(
 
     // Track which transforms were applied (including the mandatory ones if dispatcher exists)
     let mut transforms_applied: Vec<String> = Vec::new();
-    if detection::has_dispatcher(&instructions) {
+    if has_dispatcher {
         transforms_applied.push("FunctionDispatcher".to_string());
     }
     transforms_applied.extend(user_transform_names);
 
-    // INSTRUMENTATION: Track individual transform effects
+    // Track individual transform effects
     let mut transform_change_log = Vec::new();
     let mut any_transform_changed = false;
 
@@ -486,69 +490,4 @@ pub fn create_gas_report(result: &ObfuscationResult) -> serde_json::Value {
             "All opcodes were standard and successfully obfuscated"
         }
     })
-}
-
-/// Convenience function to create common transform configurations
-pub mod presets {
-    use super::*;
-    use crate::{
-        jump_address_transformer::JumpAddressTransformer, opaque_predicate::OpaquePredicate,
-        shuffle::Shuffle,
-    };
-
-    /// Default obfuscation with all transforms enabled
-    pub fn default_obfuscation(seed: Option<Seed>) -> ObfuscationConfig {
-        let seed = seed.unwrap_or_else(Seed::generate);
-        ObfuscationConfig {
-            seed,
-            transforms: vec![
-                Box::new(Shuffle),
-                Box::new(OpaquePredicate::new(PassConfig::default())),
-                Box::new(JumpAddressTransformer::new(PassConfig::default())),
-            ],
-            pass_config: PassConfig::default(),
-            preserve_unknown_opcodes: true,
-        }
-    }
-
-    /// Light obfuscation (shuffle only)
-    pub fn light_obfuscation(seed: Option<Seed>) -> ObfuscationConfig {
-        let seed = seed.unwrap_or_else(Seed::generate);
-        ObfuscationConfig {
-            seed,
-            transforms: vec![Box::new(Shuffle)],
-            pass_config: PassConfig::default(),
-            preserve_unknown_opcodes: true,
-        }
-    }
-
-    /// Custom obfuscation with specific intensity
-    pub fn custom_obfuscation(seed: Option<Seed>, intensity: f32) -> ObfuscationConfig {
-        let intensity = intensity.clamp(0.0, 1.0);
-        let seed = seed.unwrap_or_else(Seed::generate);
-        ObfuscationConfig {
-            seed,
-            transforms: vec![
-                Box::new(Shuffle),
-                Box::new(OpaquePredicate::new(PassConfig {
-                    max_opaque_ratio: intensity * 0.5,
-                    max_size_delta: intensity,
-                    aggressive: intensity > 0.7,
-                    ..PassConfig::default()
-                })),
-                Box::new(JumpAddressTransformer::new(PassConfig {
-                    max_size_delta: intensity,
-                    aggressive: intensity > 0.7,
-                    ..PassConfig::default()
-                })),
-            ],
-            pass_config: PassConfig {
-                max_size_delta: intensity,
-                aggressive: intensity > 0.7,
-                max_opaque_ratio: intensity * 0.5,
-                ..PassConfig::default()
-            },
-            preserve_unknown_opcodes: true,
-        }
-    }
 }

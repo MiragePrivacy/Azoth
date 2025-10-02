@@ -1,8 +1,10 @@
 //! azoth's single entry-point for turning byte-sequences into Heimdall instruction streams.
 
+use crate::Opcode;
 use azoth_utils::errors::DecodeError;
 use heimdall::{DisassemblerArgsBuilder, disassemble};
 use hex::FromHex;
+use std::str::FromStr;
 use std::{fmt, fs, path::Path};
 use tiny_keccak::{Hasher, Keccak};
 
@@ -241,29 +243,14 @@ impl Instruction {
     /// This version includes validation and handles edge cases.
     #[inline]
     pub fn byte_size(&self) -> usize {
-        match self.opcode.as_str() {
+        match Opcode::from_str(&self.opcode) {
             // Handle PUSH0 specifically (introduced in Shanghai fork)
-            "PUSH0" => 1, // PUSH0 has no immediate data
+            Ok(Opcode::PUSH0) => 1, // PUSH0 has no immediate data
 
             // Handle PUSH1-PUSH32
-            opcode if opcode.starts_with("PUSH") => {
-                if let Some(size_str) = opcode.strip_prefix("PUSH") {
-                    match size_str.parse::<usize>() {
-                        Ok(push_size) if (1..=32).contains(&push_size) => {
-                            1 + push_size // opcode byte + immediate bytes
-                        }
-                        _ => {
-                            // Invalid PUSH size - shouldn't happen with valid bytecode
-                            tracing::warn!("Invalid PUSH opcode: {}", opcode);
-                            1 // Fallback to single byte
-                        }
-                    }
-                } else {
-                    1 // Fallback
-                }
-            }
+            Ok(Opcode::PUSH(n)) => 1 + n as usize, // opcode byte + immediate bytes
 
-            // All other EVM instructions are single-byte
+            // All other EVM instructions (valid or unknown) are single-byte
             _ => 1,
         }
     }

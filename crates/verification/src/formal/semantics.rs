@@ -301,7 +301,7 @@ pub async fn extract_semantics_from_bytecode(
             VerificationError::BytecodeAnalysis(format!("Failed to strip bytecode: {e}"))
         })?;
 
-    let cfg_bundle = cfg_ir::build_cfg_ir(&instructions, &sections, bytecode, clean_report)
+    let cfg_bundle = cfg_ir::build_cfg_ir(&instructions, &sections, clean_report)
         .map_err(|e| VerificationError::BytecodeAnalysis(format!("Failed to build CFG: {e}")))?;
 
     extract_semantics(&cfg_bundle)
