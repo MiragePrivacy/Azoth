@@ -81,6 +81,8 @@ impl Transform for JumpAddressTransformer {
     }
 
     fn apply(&self, ir: &mut CfgIrBundle, rng: &mut StdRng) -> Result<bool, TransformError> {
+        debug!("=== JumpAddressTransformer Transform Start ===");
+
         let mut changed = false;
         let mut transformations = Vec::new();
 
@@ -90,10 +92,18 @@ impl Transform for JumpAddressTransformer {
                 let patterns = self.find_jump_patterns(instructions);
 
                 if !patterns.is_empty() {
+                    debug!(
+                        "Found {} jump patterns in block {} (node_idx={})",
+                        patterns.len(),
+                        node_idx.index(),
+                        node_idx.index()
+                    );
                     transformations.push((node_idx, patterns));
                 }
             }
         }
+
+        debug!("Total blocks with jump patterns: {}", transformations.len());
 
         // Use config to limit the number of transformations
         let max_transforms = if transformations.is_empty() {
@@ -104,9 +114,15 @@ impl Transform for JumpAddressTransformer {
                 .map(|(_, patterns)| patterns.len())
                 .sum();
 
+            debug!("Total jump patterns found: {}", total_patterns);
+
             // Use max_size_delta as a ratio to control how many jumps to transform
             let transform_ratio = self.config.max_size_delta.clamp(0.0, 1.0);
             let max_count = ((total_patterns as f32) * transform_ratio).ceil() as usize;
+            debug!(
+                "Transform ratio: {}, max transforms: {}",
+                transform_ratio, max_count
+            );
             max_count.max(1) // Transform at least one if any exist
         };
 
@@ -123,6 +139,7 @@ impl Transform for JumpAddressTransformer {
             // Shuffle and limit
             all_patterns.shuffle(rng);
             all_patterns.truncate(max_transforms);
+            debug!("Selected {} patterns to transform", all_patterns.len());
 
             // Rebuild transformations list with limited patterns
             let mut limited_transformations: Vec<(NodeIndex, Vec<usize>)> = Vec::new();
@@ -142,15 +159,35 @@ impl Transform for JumpAddressTransformer {
         }
 
         // Apply transformations (iterate in reverse to maintain indices)
-        for (node_idx, patterns) in &transformations {
+        for (block_num, (node_idx, patterns)) in transformations.iter().enumerate() {
+            debug!(
+                "Transforming block {}/{} (node_idx={})",
+                block_num + 1,
+                transformations.len(),
+                node_idx.index()
+            );
+
             if let Block::Body {
                 instructions,
                 max_stack,
+                start_pc,
                 ..
             } = &mut ir.cfg[*node_idx]
             {
+                debug!(
+                    "  Block start_pc: {:#x}, {} instructions",
+                    start_pc,
+                    instructions.len()
+                );
+
                 // Process patterns in reverse order to maintain indices
-                for &pattern_idx in patterns.iter().rev() {
+                for (pat_num, &pattern_idx) in patterns.iter().rev().enumerate() {
+                    debug!(
+                        "  Processing pattern {}/{} at instruction index {}",
+                        pat_num + 1,
+                        patterns.len(),
+                        pattern_idx
+                    );
                     if let Some(push_instr) = instructions.get(pattern_idx) {
                         if let Some(target_hex) = &push_instr.imm {
                             // Parse the jump target
@@ -213,13 +250,17 @@ impl Transform for JumpAddressTransformer {
         }
 
         if changed {
+            let total_transformed = transformations
+                .iter()
+                .map(|(_, patterns)| patterns.len())
+                .sum::<usize>();
             debug!(
                 "Applied jump address transformation to {} patterns",
-                transformations
-                    .iter()
-                    .map(|(_, patterns)| patterns.len())
-                    .sum::<usize>()
+                total_transformed
             );
+            debug!("Reindexing PCs...");
+            ir.reindex_pcs().map_err(TransformError::CoreError)?;
+            debug!("=== JumpAddressTransformer Transform Complete ===");
         }
 
         Ok(changed)

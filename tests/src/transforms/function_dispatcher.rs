@@ -9,7 +9,6 @@ use azoth_utils::seed::Seed;
 
 #[tokio::test]
 async fn test_token_dispatcher_obfuscation() {
-    // Initialize tracing only once
     let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .try_init();
