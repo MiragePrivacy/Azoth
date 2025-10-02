@@ -285,7 +285,7 @@ pub async fn extract_semantics_from_bytecode(
         bytecode.len()
     );
 
-    let (instructions, _, _) =
+    let (instructions, _, _, _) =
         decoder::decode_bytecode(&format!("0x{}", hex::encode(bytecode)), false)
             .await
             .map_err(|e| {
@@ -301,7 +301,7 @@ pub async fn extract_semantics_from_bytecode(
             VerificationError::BytecodeAnalysis(format!("Failed to strip bytecode: {e}"))
         })?;
 
-    let cfg_bundle = cfg_ir::build_cfg_ir(&instructions, &sections, bytecode, clean_report)
+    let cfg_bundle = cfg_ir::build_cfg_ir(&instructions, &sections, clean_report)
         .map_err(|e| VerificationError::BytecodeAnalysis(format!("Failed to build CFG: {e}")))?;
 
     extract_semantics(&cfg_bundle)
@@ -1241,6 +1241,7 @@ pub mod tests {
             cfg: petgraph::Graph::new(),
             pc_to_block: HashMap::new(),
             clean_report: create_empty_clean_report(),
+            sections: vec![],
             selector_mapping: None,
         };
         let analyzer = SemanticAnalyzer::new(cfg_bundle);
@@ -1282,6 +1283,7 @@ pub mod tests {
             cfg,
             pc_to_block,
             clean_report: create_empty_clean_report(),
+            sections: vec![],
             selector_mapping: None,
         };
 
@@ -1298,6 +1300,7 @@ pub mod tests {
             cfg: petgraph::Graph::new(),
             pc_to_block: HashMap::new(),
             clean_report: create_empty_clean_report(),
+            sections: vec![],
             selector_mapping: None,
         };
 

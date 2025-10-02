@@ -1,8 +1,9 @@
-use super::dispatcher::detect_function_dispatcher;
+use crate::Opcode;
 use crate::decoder::Instruction;
 use crate::is_terminal_opcode;
 use azoth_utils::errors::DetectError;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 /// Represents the type of a bytecode section.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -250,24 +251,12 @@ fn detect_deployment_fallback(
         return Some((init_end, runtime_start));
     }
 
-    // Method 2: Use dispatcher detection on potential runtime segments
-    // Look for dispatcher patterns and infer runtime start from them
-    for i in 100..instructions.len().min(aux_offset / 2) {
-        let potential_runtime = &instructions[i..];
-        if detect_function_dispatcher(potential_runtime).is_some() {
-            let runtime_start = instructions[i].pc;
-            tracing::debug!(
-                "Using dispatcher detection at PC {} as runtime start",
-                runtime_start
-            );
-            return Some((runtime_start, runtime_start));
-        }
-    }
-
-    // Method 3: Original heuristic
+    // Method 2: Heuristic detection based on common runtime start patterns
+    // Look for CALLDATASIZE or specific PUSH patterns that indicate runtime code
     for instruction in instructions.iter() {
-        if instruction.opcode == "CALLDATASIZE"
-            || (instruction.opcode == "PUSH1" && instruction.imm.as_deref() == Some("00"))
+        let opcode = Opcode::from_str(&instruction.opcode).ok();
+        if matches!(opcode, Some(Opcode::CALLDATASIZE))
+            || (matches!(opcode, Some(Opcode::PUSH(1))) && instruction.imm.as_deref() == Some("00"))
         {
             let potential_runtime_start = instruction.pc;
             if potential_runtime_start > 100 && potential_runtime_start < aux_offset {
@@ -286,13 +275,15 @@ fn detect_deployment_fallback(
 /// Simple CODECOPY + RETURN detection
 fn detect_codecopy_return_simple(instructions: &[Instruction]) -> Option<(usize, usize)> {
     // Find first CODECOPY
-    let codecopy_idx = instructions.iter().position(|i| i.opcode == "CODECOPY")?;
+    let codecopy_idx = instructions
+        .iter()
+        .position(|i| matches!(Opcode::from_str(&i.opcode), Ok(Opcode::CODECOPY)))?;
 
     // Find RETURN after CODECOPY (within reasonable distance)
     let return_idx = instructions[codecopy_idx..]
         .iter()
         .take(20)
-        .position(|i| i.opcode == "RETURN")
+        .position(|i| matches!(Opcode::from_str(&i.opcode), Ok(Opcode::RETURN)))
         .map(|pos| codecopy_idx + pos)?;
 
     let init_end = instructions[return_idx].pc + 1;
@@ -301,7 +292,8 @@ fn detect_codecopy_return_simple(instructions: &[Instruction]) -> Option<(usize,
     let mut runtime_start = init_end; // fallback
 
     for i in (0..codecopy_idx).rev().take(10) {
-        if instructions[i].opcode.starts_with("PUSH")
+        let opcode = Opcode::from_str(&instructions[i].opcode).ok();
+        if matches!(opcode, Some(Opcode::PUSH(_) | Opcode::PUSH0))
             && let Some(imm) = &instructions[i].imm
             && let Ok(value) = usize::from_str_radix(imm, 16)
             && value > init_end
@@ -410,7 +402,7 @@ fn detect_padding(instructions: &[Instruction], aux_offset: usize) -> Option<(us
     let last_terminal = instructions
         .iter()
         .rev()
-        .skip_while(|instr| instr.opcode == "STOP")
+        .skip_while(|instr| matches!(Opcode::from_str(&instr.opcode), Ok(Opcode::STOP)))
         .find(|instr| is_terminal_opcode(&instr.opcode));
 
     last_terminal.and_then(|instr| {
@@ -447,13 +439,20 @@ fn detect_init_runtime_split(instructions: &[Instruction]) -> Option<(usize, usi
 /// Detects the strict deployment pattern (original heuristic)
 fn detect_strict_deployment_pattern(instructions: &[Instruction]) -> Option<(usize, usize, usize)> {
     for i in 0..instructions.len().saturating_sub(6) {
-        if instructions[i].opcode.starts_with("PUSH")
-            && instructions[i + 1].opcode.starts_with("PUSH")
-            && matches!(instructions[i + 2].opcode.as_str(), "PUSH0" | "PUSH1")
+        let op0 = Opcode::from_str(&instructions[i].opcode).ok();
+        let op1 = Opcode::from_str(&instructions[i + 1].opcode).ok();
+        let op2 = Opcode::from_str(&instructions[i + 2].opcode).ok();
+        let op3 = Opcode::from_str(&instructions[i + 3].opcode).ok();
+        let op4 = Opcode::from_str(&instructions[i + 4].opcode).ok();
+        let op5 = Opcode::from_str(&instructions[i + 5].opcode).ok();
+
+        if matches!(op0, Some(Opcode::PUSH(_) | Opcode::PUSH0))
+            && matches!(op1, Some(Opcode::PUSH(_) | Opcode::PUSH0))
+            && matches!(op2, Some(Opcode::PUSH0 | Opcode::PUSH(1)))
             && instructions[i + 2].imm.as_deref() == Some("00")
-            && instructions[i + 3].opcode == "CODECOPY"
-            && instructions[i + 4].opcode.starts_with("PUSH")
-            && instructions[i + 5].opcode == "RETURN"
+            && matches!(op3, Some(Opcode::CODECOPY))
+            && matches!(op4, Some(Opcode::PUSH(_) | Opcode::PUSH0))
+            && matches!(op5, Some(Opcode::RETURN))
         {
             let runtime_len = instructions[i]
                 .imm
@@ -484,13 +483,13 @@ fn detect_codecopy_return_pattern(instructions: &[Instruction]) -> Option<(usize
     // Find CODECOPY instruction
     let codecopy_idx = instructions
         .iter()
-        .position(|instr| instr.opcode == "CODECOPY")?;
+        .position(|instr| matches!(Opcode::from_str(&instr.opcode), Ok(Opcode::CODECOPY)))?;
 
     // Look for RETURN after CODECOPY (within reasonable distance)
     let return_idx = instructions[codecopy_idx + 1..]
         .iter()
         .take(10) // Look within next 10 instructions
-        .position(|instr| instr.opcode == "RETURN")
+        .position(|instr| matches!(Opcode::from_str(&instr.opcode), Ok(Opcode::RETURN)))
         .map(|pos| codecopy_idx + 1 + pos)?;
 
     // Try to extract runtime parameters from PUSH instructions before CODECOPY
@@ -499,7 +498,8 @@ fn detect_codecopy_return_pattern(instructions: &[Instruction]) -> Option<(usize
 
     // Look backwards from CODECOPY for PUSH instructions
     for i in (0..codecopy_idx).rev().take(10) {
-        if instructions[i].opcode.starts_with("PUSH")
+        let opcode = Opcode::from_str(&instructions[i].opcode).ok();
+        if matches!(opcode, Some(Opcode::PUSH(_) | Opcode::PUSH0))
             && let Some(imm) = &instructions[i].imm
             && let Ok(value) = usize::from_str_radix(imm, 16)
         {

@@ -20,8 +20,7 @@ pub mod dispatcher;
 pub mod sections;
 
 pub use dispatcher::{
-    DispatcherInfo, ExtractionPattern, FunctionSelector, detect_function_dispatcher,
-    has_dispatcher, is_calldata_extraction_pattern,
+    DispatcherInfo, ExtractionPattern, FunctionSelector, detect_function_dispatcher, has_dispatcher,
 };
 
 pub use sections::{

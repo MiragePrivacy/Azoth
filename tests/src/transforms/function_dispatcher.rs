@@ -9,18 +9,17 @@ use azoth_utils::seed::Seed;
 
 #[tokio::test]
 async fn test_token_dispatcher_obfuscation() {
-    // Initialize tracing only once
     let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .try_init();
 
     let bytecode =
-        "0x60003560e01c80637ff36ab514601a578063a9059cbb14602157600080fd5b600080fd5b600080fd";
+        "0x60003560e01c80637ff36ab514601e578063a9059cbb14602357600080fd5b600080fd5b600080fd";
 
     println!("Input bytecode: {}", bytecode);
 
     // Analyze original bytecode
-    let (instructions, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
+    let (instructions, _, _, _) = decoder::decode_bytecode(bytecode, false).await.unwrap();
 
     println!("\nOriginal dispatcher structure:");
     for (i, instr) in instructions.iter().enumerate() {
@@ -82,7 +81,7 @@ async fn test_token_dispatcher_obfuscation() {
     );
 
     // Decode obfuscated bytecode
-    let (obfuscated_instructions, _, _) =
+    let (obfuscated_instructions, _, _, _) =
         decoder::decode_bytecode(&result.obfuscated_bytecode, false)
             .await
             .unwrap();

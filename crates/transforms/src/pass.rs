@@ -56,13 +56,3 @@ impl Pass for DefaultPass {
         Ok(())
     }
 }
-
-/// Convenience function to run the default pass.
-pub fn run(
-    ir: &mut CfgIrBundle,
-    passes: &[Box<dyn Transform>],
-    cfg: &PassConfig,
-    seed: &Seed,
-) -> Result<(), TransformError> {
-    DefaultPass.run(ir, passes, cfg, seed)
-}

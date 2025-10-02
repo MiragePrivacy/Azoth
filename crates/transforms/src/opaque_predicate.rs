@@ -46,6 +46,8 @@ impl Transform for OpaquePredicate {
     }
 
     fn apply(&self, ir: &mut CfgIrBundle, rng: &mut StdRng) -> Result<bool, TransformError> {
+        debug!("=== OpaquePredicate Transform Start ===");
+
         let mut changed = false;
         let max_opaque = self.config.max_opaque_ratio;
         let mut eligible_blocks: Vec<NodeIndex> = ir
@@ -62,23 +64,48 @@ impl Transform for OpaquePredicate {
             })
             .collect();
 
+        debug!(
+            "Found {} eligible blocks for opaque predicates",
+            eligible_blocks.len()
+        );
+
         let max_predicates = ((eligible_blocks.len() as f32) * max_opaque).ceil() as usize;
         if max_predicates == 0 || eligible_blocks.is_empty() {
+            debug!("No eligible blocks - skipping");
             return Ok(false);
         }
         let predicate_count = rng.random_range(1..=max_predicates.min(eligible_blocks.len()));
+        debug!("Will insert {} opaque predicates", predicate_count);
+
         eligible_blocks.shuffle(rng);
         let selected: Vec<NodeIndex> = eligible_blocks.into_iter().take(predicate_count).collect();
 
-        for block_id in selected {
+        for (idx, block_id) in selected.iter().enumerate() {
+            debug!(
+                "Processing block {}/{} (node_idx={})",
+                idx + 1,
+                selected.len(),
+                block_id.index()
+            );
+
             let original_fallthrough = ir
                 .cfg
-                .edges_directed(block_id, petgraph::Outgoing)
+                .edges_directed(*block_id, petgraph::Outgoing)
                 .find(|e| *e.weight() == EdgeType::Fallthrough)
                 .map(|e| e.target());
 
+            debug!(
+                "  Original fallthrough: {:?}",
+                original_fallthrough.map(|n| n.index())
+            );
+
             let true_start_pc = ir.pc_to_block.keys().max().map_or(0, |&pc| pc + 1);
             let false_start_pc = true_start_pc + 1;
+
+            debug!(
+                "  Creating predicate branches at PCs: true={:#x}, false={:#x}",
+                true_start_pc, false_start_pc
+            );
 
             let true_label = ir.cfg.add_node(Block::Body {
                 start_pc: true_start_pc,
@@ -122,7 +149,17 @@ impl Transform for OpaquePredicate {
                 max_stack: 1,
             });
 
-            if let Block::Body { instructions, .. } = &mut ir.cfg[block_id] {
+            if let Block::Body {
+                instructions,
+                start_pc,
+                ..
+            } = &mut ir.cfg[*block_id]
+            {
+                debug!(
+                    "  Block start_pc: {:#x}, {} instructions",
+                    start_pc,
+                    instructions.len()
+                );
                 let seed = rng.random::<u64>();
                 let constant = self.generate_constant(seed);
                 let constant_hex = hex::encode(constant);
@@ -166,22 +203,30 @@ impl Transform for OpaquePredicate {
             }
 
             if let Some(target) = original_fallthrough {
-                ir.cfg
-                    .remove_edge(ir.cfg.find_edge(block_id, target).unwrap());
+                let edge = ir.cfg.find_edge(*block_id, target).unwrap();
+                ir.cfg.remove_edge(edge);
+                debug!("  Removed original fallthrough edge");
             }
-            ir.cfg.add_edge(block_id, true_label, EdgeType::BranchTrue);
+            ir.cfg.add_edge(*block_id, true_label, EdgeType::BranchTrue);
             ir.cfg
-                .add_edge(block_id, false_label, EdgeType::BranchFalse);
+                .add_edge(*block_id, false_label, EdgeType::BranchFalse);
+            debug!("  Added branch edges to true and false labels");
+
             if let Some(target) = original_fallthrough {
                 ir.cfg.add_edge(false_label, target, EdgeType::Jump);
                 ir.cfg.add_edge(true_label, target, EdgeType::Fallthrough);
+                debug!("  Connected branches back to original fallthrough");
             }
 
             changed = true;
+            debug!("  ✓ Opaque predicate inserted successfully");
         }
 
         if changed {
             debug!("Inserted {} opaque predicates", predicate_count);
+            debug!("Reindexing PCs...");
+            ir.reindex_pcs().map_err(TransformError::CoreError)?;
+            debug!("=== OpaquePredicate Transform Complete ===");
         }
         Ok(changed)
     }

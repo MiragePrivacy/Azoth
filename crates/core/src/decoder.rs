@@ -1,15 +1,17 @@
 //! azoth's single entry-point for turning byte-sequences into Heimdall instruction streams.
 
+use crate::Opcode;
 use azoth_utils::errors::DecodeError;
 use heimdall::{DisassemblerArgsBuilder, disassemble};
 use hex::FromHex;
+use std::str::FromStr;
 use std::{fmt, fs, path::Path};
 use tiny_keccak::{Hasher, Keccak};
 
 /// Represents a single disassembled instruction.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Instruction {
-    /// the instruction’s program counter (in bytes)
+    /// the instruction's program counter (in bytes)
     pub pc: usize,
     /// Opcode name - the mnemonic (e.g. "PUSH1", "ADD")
     pub opcode: String,
@@ -36,17 +38,49 @@ pub enum SourceType {
     // OnChain remains for future RPC-based fetching
 }
 
+/// Normalizes hex strings by removing whitespace, 0x prefix, and ensuring even length
+pub fn normalize_hex_string(input: &str) -> Result<String, DecodeError> {
+    let clean = input
+        .trim()
+        .replace(['\n', '\r', ' ', '\t'], "")
+        .strip_prefix("0x")
+        .unwrap_or(input.trim().replace(['\n', '\r', ' ', '\t'], "").as_str())
+        .to_string();
+
+    // Validate hex characters
+    if !clean.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(DecodeError::HexDecode(
+            hex::FromHexError::InvalidHexCharacter {
+                c: clean
+                    .chars()
+                    .find(|c| !c.is_ascii_hexdigit())
+                    .unwrap_or('?'),
+                index: 0,
+            },
+        ));
+    }
+
+    // Ensure even length by padding with leading zero if necessary
+    Ok(if clean.len() % 2 == 1 {
+        format!("0{}", clean)
+    } else {
+        clean
+    })
+}
+
 /// Normalizes input into a byte vector from hex string or file.
 pub fn input_to_bytes(input: &str, is_file: bool) -> Result<Vec<u8>, DecodeError> {
     if is_file {
         let path = Path::new(input);
-        fs::read(path).map_err(|e| DecodeError::FileRead {
+        let file_content = fs::read_to_string(path).map_err(|e| DecodeError::FileRead {
             path: path.display().to_string(),
             source: e,
-        })
+        })?;
+        let normalized = normalize_hex_string(&file_content)?;
+        Vec::from_hex(&normalized).map_err(DecodeError::HexDecode)
     } else {
-        let clean = input.strip_prefix("0x").unwrap_or(input);
-        Vec::from_hex(clean).map_err(DecodeError::HexDecode)
+        let normalized = normalize_hex_string(input)?;
+        Vec::from_hex(&normalized).map_err(DecodeError::HexDecode)
     }
 }
 
@@ -110,12 +144,12 @@ pub async fn decode_bytecode_from_bytes(
 /// * `is_file` - Flag indicating if the input is a file path (false for hex string).
 ///
 /// # Returns
-/// A tuple of (InstructionStream, DecodeInfo, raw assembly string), or an error if decoding fails.
+/// A tuple of (InstructionStream, DecodeInfo, raw assembly string, raw bytes), or an error if decoding fails.
 pub async fn decode_bytecode(
     input: &str,
     is_file: bool,
-) -> Result<(Vec<Instruction>, DecodeInfo, String), DecodeError> {
-    // 1. Normalize input to bytes
+) -> Result<(Vec<Instruction>, DecodeInfo, String, Vec<u8>), DecodeError> {
+    // 1. Normalize input to bytes (handles hex normalization internally)
     let bytes = input_to_bytes(input, is_file)?;
 
     // 2. Determine source type
@@ -126,7 +160,9 @@ pub async fn decode_bytecode(
     };
 
     // 3. Delegate to the core decoding function
-    decode_bytecode_from_bytes(&bytes, source).await
+    let (instructions, decode_info, asm) = decode_bytecode_from_bytes(&bytes, source).await?;
+
+    Ok((instructions, decode_info, asm, bytes))
 }
 
 /// Parses the assembly string into a vector of Instructions.
@@ -207,29 +243,14 @@ impl Instruction {
     /// This version includes validation and handles edge cases.
     #[inline]
     pub fn byte_size(&self) -> usize {
-        match self.opcode.as_str() {
+        match Opcode::from_str(&self.opcode) {
             // Handle PUSH0 specifically (introduced in Shanghai fork)
-            "PUSH0" => 1, // PUSH0 has no immediate data
+            Ok(Opcode::PUSH0) => 1, // PUSH0 has no immediate data
 
             // Handle PUSH1-PUSH32
-            opcode if opcode.starts_with("PUSH") => {
-                if let Some(size_str) = opcode.strip_prefix("PUSH") {
-                    match size_str.parse::<usize>() {
-                        Ok(push_size) if (1..=32).contains(&push_size) => {
-                            1 + push_size // opcode byte + immediate bytes
-                        }
-                        _ => {
-                            // Invalid PUSH size - shouldn't happen with valid bytecode
-                            tracing::warn!("Invalid PUSH opcode: {}", opcode);
-                            1 // Fallback to single byte
-                        }
-                    }
-                } else {
-                    1 // Fallback
-                }
-            }
+            Ok(Opcode::PUSH(n)) => 1 + n as usize, // opcode byte + immediate bytes
 
-            // All other EVM instructions are single-byte
+            // All other EVM instructions (valid or unknown) are single-byte
             _ => 1,
         }
     }

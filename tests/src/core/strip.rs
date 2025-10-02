@@ -9,7 +9,7 @@ async fn test_round_trip() {
         .init();
     // Fixture: Init (6 bytes) + Runtime (2 bytes) + Auxdata (6 bytes)
     let bytecode = hex::decode("600a600e600039600af3deadbeef6001a165627a7a72").unwrap();
-    let (instructions, _, _) = decode_bytecode(&format!("0x{}", hex::encode(&bytecode)), false)
+    let (instructions, _, _, _) = decode_bytecode(&format!("0x{}", hex::encode(&bytecode)), false)
         .await
         .unwrap();
     let sections = detection::locate_sections(&bytecode, &instructions).unwrap();
@@ -33,7 +33,7 @@ async fn test_runtime_only() {
         .init();
     // Fixture: Runtime-only bytecode (2 bytes)
     let bytecode = hex::decode("6001").unwrap();
-    let (instructions, _, _) = decode_bytecode(&format!("0x{}", hex::encode(&bytecode)), false)
+    let (instructions, _, _, _) = decode_bytecode(&format!("0x{}", hex::encode(&bytecode)), false)
         .await
         .unwrap();
     let sections = detection::locate_sections(&bytecode, &instructions).unwrap();
