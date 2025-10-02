@@ -1,4 +1,3 @@
-use super::dispatcher::detect_function_dispatcher;
 use crate::decoder::Instruction;
 use crate::is_terminal_opcode;
 use azoth_utils::errors::DetectError;
@@ -250,21 +249,8 @@ fn detect_deployment_fallback(
         return Some((init_end, runtime_start));
     }
 
-    // Method 2: Use dispatcher detection on potential runtime segments
-    // Look for dispatcher patterns and infer runtime start from them
-    for i in 100..instructions.len().min(aux_offset / 2) {
-        let potential_runtime = &instructions[i..];
-        if detect_function_dispatcher(potential_runtime).is_some() {
-            let runtime_start = instructions[i].pc;
-            tracing::debug!(
-                "Using dispatcher detection at PC {} as runtime start",
-                runtime_start
-            );
-            return Some((runtime_start, runtime_start));
-        }
-    }
-
-    // Method 3: Original heuristic
+    // Method 2: Heuristic detection based on common runtime start patterns
+    // Look for CALLDATASIZE or specific PUSH patterns that indicate runtime code
     for instruction in instructions.iter() {
         if instruction.opcode == "CALLDATASIZE"
             || (instruction.opcode == "PUSH1" && instruction.imm.as_deref() == Some("00"))

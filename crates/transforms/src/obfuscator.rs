@@ -137,13 +137,41 @@ pub async fn obfuscate_bytecode(
     let mut all_transforms: Vec<Box<dyn crate::Transform>> = Vec::new();
 
     // Only add function dispatcher if the bytecode actually contains one
-    if detection::has_dispatcher(&instructions) {
+    let runtime_section = sections
+        .iter()
+        .find(|s| s.kind == detection::SectionKind::Runtime);
+
+    let has_runtime_dispatcher = if let Some(runtime_sec) = runtime_section {
+        // Filter instructions to only those in runtime section
+        let runtime_instructions: Vec<_> = instructions
+            .iter()
+            .filter(|instr| {
+                instr.pc >= runtime_sec.offset && instr.pc < runtime_sec.offset + runtime_sec.len
+            })
+            .cloned()
+            .collect();
+
+        tracing::debug!(
+            "Checking for dispatcher in {} runtime instructions",
+            runtime_instructions.len()
+        );
+        detection::has_dispatcher(&runtime_instructions)
+    } else {
+        // No runtime section = probably pure runtime bytecode
+        detection::has_dispatcher(&instructions)
+    };
+
+    if has_runtime_dispatcher {
         all_transforms.push(Box::new(FunctionDispatcher::new(
             config.pass_config.clone(),
         )));
-        tracing::debug!("Function dispatcher detected - adding FunctionDispatcher transform");
+        tracing::debug!(
+            "Function dispatcher detected in runtime - adding FunctionDispatcher transform"
+        );
     } else {
-        tracing::debug!("No function dispatcher detected - skipping FunctionDispatcher transform");
+        tracing::debug!(
+            "No function dispatcher detected in runtime - skipping FunctionDispatcher transform"
+        );
     }
 
     let user_transform_names: Vec<String> = config

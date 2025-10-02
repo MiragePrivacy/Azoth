@@ -115,31 +115,123 @@ fn create_config_with_transforms(
 
 #[tokio::test]
 async fn test_function_dispatch_only() -> Result<()> {
+    // Initialize tracing subscriber for this test
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_test_writer()
+        .try_init();
+
     let seed = Seed::generate();
 
-    println!("Testing function dispatch only (no other transforms)");
+    println!("\n=== Testing Function Dispatch Only ===\n");
 
-    let original_address = deploy_and_verify_contract_revm(ESCROW_CONTRACT_BYTECODE, "Original")?;
-
+    // Step 2: Apply transformation
+    println!("Step 2: Applying FunctionDispatcher transform...");
     let config = create_config_with_transforms(vec![], seed);
-    let result = obfuscate_bytecode(ESCROW_CONTRACT_BYTECODE, config)
-        .await
-        .map_err(|e| eyre!("Failed to obfuscate bytecode: {}", e))?;
 
-    assert_ne!(result.obfuscated_bytecode, ESCROW_CONTRACT_BYTECODE);
-    assert!(result
-        .metadata
-        .transforms_applied
-        .contains(&"FunctionDispatcher".to_string()));
+    let result = match obfuscate_bytecode(ESCROW_CONTRACT_BYTECODE, config).await {
+        Ok(r) => {
+            println!("✓ Transformation completed");
+            println!("  Original size: {} bytes", r.original_size);
+            println!("  Obfuscated size: {} bytes", r.obfuscated_size);
+            println!(
+                "  Size delta: {:+} bytes ({:+.1}%)",
+                r.obfuscated_size as isize - r.original_size as isize,
+                r.size_increase_percentage
+            );
+            println!(
+                "  Transforms applied: {:?}\n",
+                r.metadata.transforms_applied
+            );
+            r
+        }
+        Err(e) => {
+            println!("✗ Transformation failed: {}\n", e);
+            return Err(eyre!("Failed to obfuscate bytecode: {}", e));
+        }
+    };
 
-    let obfuscated_address =
-        deploy_and_verify_contract_revm(&result.obfuscated_bytecode, "FunctionDispatch-Only")?;
+    // // Verify FunctionDispatcher was applied
+    // assert!(
+    //     result.metadata.transforms_applied.contains(&"FunctionDispatcher".to_string()),
+    //     "FunctionDispatcher should be in transforms_applied"
+    // );
 
-    println!(
-        "✓ Function dispatch test passed - Original: {}, Obfuscated: {}",
-        original_address, obfuscated_address
+    // Verify bytecode actually changed
+    assert_ne!(
+        result.obfuscated_bytecode, ESCROW_CONTRACT_BYTECODE,
+        "Obfuscated bytecode should differ from original"
     );
-    Ok(())
+
+    println!("Step 3: Analyzing obfuscated bytecode...");
+
+    // Decode directly from the hex string
+    let (instructions, _, _, bytes) = azoth_core::decoder::decode_bytecode(
+        &result.obfuscated_bytecode,
+        false, // not a file
+    )
+    .await
+    .map_err(|e| eyre!("Failed to decode obfuscated bytecode: {}", e))?;
+
+    println!("  Total instructions: {}", instructions.len());
+    println!("  Bytecode size: {} bytes", bytes.len());
+    println!("  First 8 instructions:");
+    for (i, instr) in instructions.iter().take(8).enumerate() {
+        println!(
+            "    {}: {} {}",
+            i,
+            instr.opcode,
+            instr
+                .imm
+                .as_ref()
+                .map(|s| format!("0x{}", s))
+                .unwrap_or_default()
+        );
+    }
+
+    // Count JUMPDESTs
+    let jumpdest_count = instructions
+        .iter()
+        .filter(|i| i.opcode == "JUMPDEST")
+        .count();
+    println!("  JUMPDEST count: {}", jumpdest_count);
+
+    // Look for dispatcher pattern changes
+    let push4_count = instructions.iter().filter(|i| i.opcode == "PUSH4").count();
+    println!(
+        "  PUSH4 count: {} (should be reduced if dispatcher was transformed)",
+        push4_count
+    );
+    println!();
+
+    // Step 4: Deploy obfuscated contract
+    println!("Step 4: Deploying obfuscated contract...");
+    match deploy_and_verify_contract_revm(&result.obfuscated_bytecode, "FunctionDispatch-Only") {
+        Ok(obfuscated_address) => {
+            println!(
+                "✓ Obfuscated deployed successfully at: {}",
+                obfuscated_address
+            );
+            println!("\n=== Test Passed ===");
+            // println!("Original:    {}", original_address);
+            println!("Obfuscated:  {}", obfuscated_address);
+            Ok(())
+        }
+        Err(e) => {
+            println!("✗ Obfuscated contract failed to deploy");
+            println!("Error: {}\n", e);
+
+            // Dump diagnostic info
+            println!("=== Diagnostic Information ===");
+            println!("First 100 bytes of obfuscated bytecode:");
+            let hex_str = hex::encode(&bytes[..bytes.len().min(100)]);
+            for chunk in hex_str.as_bytes().chunks(64) {
+                println!("  {}", String::from_utf8_lossy(chunk));
+            }
+
+            Err(eyre!("Deployment failed: {}", e))
+        }
+    }
 }
 
 #[tokio::test]

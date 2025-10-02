@@ -1241,6 +1241,7 @@ pub mod tests {
             cfg: petgraph::Graph::new(),
             pc_to_block: HashMap::new(),
             clean_report: create_empty_clean_report(),
+            sections: vec![],
             selector_mapping: None,
         };
         let analyzer = SemanticAnalyzer::new(cfg_bundle);
@@ -1282,6 +1283,7 @@ pub mod tests {
             cfg,
             pc_to_block,
             clean_report: create_empty_clean_report(),
+            sections: vec![],
             selector_mapping: None,
         };
 
@@ -1298,6 +1300,7 @@ pub mod tests {
             cfg: petgraph::Graph::new(),
             pc_to_block: HashMap::new(),
             clean_report: create_empty_clean_report(),
+            sections: vec![],
             selector_mapping: None,
         };
 

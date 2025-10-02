@@ -460,7 +460,28 @@ impl Transform for FunctionDispatcher {
     }
 
     fn apply(&self, ir: &mut CfgIrBundle, rng: &mut StdRng) -> Result<bool, TransformError> {
-        // Collect all instructions from all blocks in execution order
+        debug!("=== FunctionDispatcher Transform Start ===");
+
+        // Find the runtime section
+        let runtime_section = ir
+            .sections
+            .iter()
+            .find(|s| s.kind == azoth_core::detection::SectionKind::Runtime);
+
+        let (runtime_start, runtime_end) = if let Some(section) = runtime_section {
+            (section.offset, section.offset + section.len)
+        } else {
+            // No runtime section found - analyze all instructions
+            debug!("No runtime section found, analyzing all instructions");
+            (0, usize::MAX)
+        };
+
+        debug!(
+            "Runtime section: PC range [{:#x}, {:#x})",
+            runtime_start, runtime_end
+        );
+
+        // Collect instructions from blocks within the runtime section
         let mut all_instructions = Vec::new();
         let mut block_boundaries = Vec::new();
 
@@ -471,18 +492,21 @@ impl Transform for FunctionDispatcher {
                 ..
             } = &ir.cfg[node_idx]
             {
-                block_boundaries.push((node_idx, all_instructions.len(), *start_pc));
-                all_instructions.extend(instructions.clone());
+                // Only include blocks within runtime section
+                if *start_pc >= runtime_start && *start_pc < runtime_end {
+                    block_boundaries.push((node_idx, all_instructions.len(), *start_pc));
+                    all_instructions.extend(instructions.clone());
+                }
             }
         }
 
         debug!(
-            "Analyzing {} instructions across {} blocks",
+            "Analyzing {} instructions across {} runtime blocks",
             all_instructions.len(),
             block_boundaries.len()
         );
 
-        // Detect any dispatcher pattern (works for all types: Standard, Alternative, Newer, etc.)
+        // Detect any dispatcher pattern
         if let Some((start, end, selectors)) = self.detect_dispatcher(&all_instructions) {
             debug!(
                 "Found dispatcher at offset {}..{} with {} selectors",
@@ -491,8 +515,85 @@ impl Transform for FunctionDispatcher {
                 selectors.len()
             );
 
+            debug!("Validating dispatcher targets against CFG...");
+            debug!(
+                "Targets are in deployed bytecode coordinates, adjusting by runtime offset +{:#x}",
+                runtime_start
+            );
+
+            let mut validated_selectors = Vec::new();
+            let mut validation_failures = Vec::new();
+
+            for selector_info in selectors {
+                // Target addresses are in deployed bytecode coordinates (PC 0 = start of runtime)
+                // CFG uses original bytecode PCs, so we need to add the runtime offset
+                let deployed_target = selector_info.target_address as usize;
+                let original_target_pc = runtime_start + deployed_target;
+
+                // Check if target is a valid block start in original PC space
+                if let Some(&block_idx) = ir.pc_to_block.get(&original_target_pc) {
+                    if let Block::Body {
+                        instructions,
+                        start_pc,
+                        ..
+                    } = &ir.cfg[block_idx]
+                    {
+                        // Verify block starts with JUMPDEST at the correct PC
+                        if let Some(first_instr) = instructions.first() {
+                            if first_instr.opcode == "JUMPDEST" && *start_pc == original_target_pc {
+                                validated_selectors.push(selector_info.clone());
+                                debug!(
+                                    "  ✓ Selector 0x{:08x} -> 0x{:x} (original PC: 0x{:x}, block {}, JUMPDEST)",
+                                    selector_info.selector,
+                                    deployed_target,
+                                    original_target_pc,
+                                    block_idx.index()
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // Target failed validation
+                validation_failures.push((
+                    selector_info.selector,
+                    deployed_target,
+                    format!(
+                        "invalid block start (original PC: 0x{:x})",
+                        original_target_pc
+                    ),
+                ));
+                debug!(
+                    "  ✗ Selector 0x{:08x} -> 0x{:x} (original PC: 0x{:x}, invalid block start)",
+                    selector_info.selector, deployed_target, original_target_pc
+                );
+            }
+
+            if !validation_failures.is_empty() {
+                let failures_summary: Vec<_> = validation_failures
+                    .iter()
+                    .map(|(sel, pc, reason)| format!("0x{:08x}->0x{:x} ({})", sel, pc, reason))
+                    .collect();
+
+                return Err(TransformError::Generic(format!(
+                    "Dispatcher validation failed: {} of {} targets are not valid block starts. \
+                     Failed: [{}]. This indicates CFG construction issues.",
+                    validation_failures.len(),
+                    validated_selectors.len() + validation_failures.len(),
+                    failures_summary.join(", ")
+                )));
+            }
+
+            debug!(
+                "All {} targets validated successfully",
+                validated_selectors.len()
+            );
+            let selectors = validated_selectors;
+
             // Generate cryptographically secure token mapping
             let mapping = self.generate_mapping(&selectors, rng)?;
+            debug!("Generated {} token mappings", mapping.len());
 
             // Find which blocks contain the dispatcher
             let mut affected_blocks = Vec::new();
@@ -505,111 +606,117 @@ impl Transform for FunctionDispatcher {
                 };
 
                 let block_end = block_start + block_instructions;
-
                 if block_start < end && block_end > start {
                     affected_blocks.push((node_idx, block_start, start_pc));
+                    debug!(
+                        "Block {} is affected (PC 0x{:x})",
+                        node_idx.index(),
+                        start_pc
+                    );
                 }
             }
 
-            if !affected_blocks.is_empty() {
-                debug!("Dispatcher spans {} blocks", affected_blocks.len());
+            if affected_blocks.is_empty() {
+                debug!("No affected blocks found - skipping");
+                return Ok(false);
+            }
 
-                // Calculate original dispatcher size
-                let mut total_original_size = 0;
-                for (block_idx, block_start, _) in &affected_blocks {
-                    if let Block::Body { instructions, .. } = &ir.cfg[*block_idx] {
-                        let block_dispatcher_start = if start >= *block_start {
-                            start - block_start
-                        } else {
-                            0
-                        };
-                        let block_dispatcher_end = if end >= *block_start {
-                            (end - block_start).min(instructions.len())
-                        } else {
-                            0
-                        };
+            // Calculate original dispatcher size
+            let mut total_original_size = 0;
+            for (block_idx, block_start, _) in &affected_blocks {
+                if let Block::Body { instructions, .. } = &ir.cfg[*block_idx] {
+                    let block_dispatcher_start = if start >= *block_start {
+                        start - block_start
+                    } else {
+                        0
+                    };
+                    let block_dispatcher_end = if end >= *block_start {
+                        (end - block_start).min(instructions.len())
+                    } else {
+                        0
+                    };
 
-                        if block_dispatcher_start < instructions.len()
-                            && block_dispatcher_end > block_dispatcher_start
-                        {
-                            let block_section =
-                                &instructions[block_dispatcher_start..block_dispatcher_end];
-                            total_original_size += self.estimate_bytecode_size(block_section);
-                        }
-                    }
-                }
-
-                // Generate the complete disguised dispatcher
-                let (new_instructions, needed_stack) =
-                    self.create_obfuscated_dispatcher(&selectors, &mapping, rng)?;
-
-                let new_size = self.estimate_bytecode_size(&new_instructions);
-                let size_delta = new_size as isize - total_original_size as isize;
-
-                debug!(
-                    "Dispatcher transformation: {} → {} bytes (Δ{:+})",
-                    total_original_size, new_size, size_delta
-                );
-
-                // Clear original dispatcher sections from all affected blocks
-                for (block_idx, block_start, _) in &affected_blocks {
-                    if let Block::Body {
-                        instructions,
-                        max_stack,
-                        ..
-                    } = &mut ir.cfg[*block_idx]
+                    if block_dispatcher_start < instructions.len()
+                        && block_dispatcher_end > block_dispatcher_start
                     {
-                        let block_dispatcher_start = if start >= *block_start {
-                            start - block_start
-                        } else {
-                            0
-                        };
-                        let block_dispatcher_end = if end >= *block_start {
-                            (end - block_start).min(instructions.len())
-                        } else {
-                            0
-                        };
-
-                        if block_dispatcher_start < instructions.len()
-                            && block_dispatcher_end > block_dispatcher_start
-                        {
-                            instructions.drain(block_dispatcher_start..block_dispatcher_end);
-                            *max_stack = (*max_stack).max(needed_stack);
-                        }
+                        let block_section =
+                            &instructions[block_dispatcher_start..block_dispatcher_end];
+                        total_original_size += self.estimate_bytecode_size(block_section);
                     }
                 }
-
-                // Insert the disguised dispatcher into the first affected block
-                let (first_block_idx, first_block_start, first_block_start_pc) = affected_blocks[0];
-                if let Block::Body { instructions, .. } = &mut ir.cfg[first_block_idx] {
-                    let insertion_point = start.saturating_sub(first_block_start);
-
-                    for (i, new_instr) in new_instructions.into_iter().enumerate() {
-                        instructions.insert(insertion_point + i, new_instr);
-                    }
-                }
-
-                // Update any internal CALL instructions to use tokens
-                self.update_internal_calls(ir, &mapping)?;
-
-                // Update CFG structure and addresses
-                let region_start = first_block_start_pc;
-                ir.update_jump_targets(size_delta, region_start, None)
-                    .map_err(TransformError::CoreError)?;
-
-                ir.reindex_pcs().map_err(TransformError::CoreError)?;
-
-                // Rebuild edges for all affected blocks
-                for (block_idx, _, _) in &affected_blocks {
-                    ir.rebuild_edges_for_block(*block_idx)
-                        .map_err(TransformError::CoreError)?;
-                }
-
-                // Store the mapping in the CFG bundle for potential future use
-                ir.selector_mapping = Some(mapping);
-
-                return Ok(true);
             }
+
+            // Generate the complete disguised dispatcher
+            let (new_instructions, needed_stack) =
+                self.create_obfuscated_dispatcher(&selectors, &mapping, rng)?;
+
+            let new_size = self.estimate_bytecode_size(&new_instructions);
+            let size_delta = new_size as isize - total_original_size as isize;
+
+            debug!(
+                "Dispatcher transformation: {} → {} bytes (Δ{:+})",
+                total_original_size, new_size, size_delta
+            );
+
+            // Clear original dispatcher sections from all affected blocks
+            for (block_idx, block_start, _) in &affected_blocks {
+                if let Block::Body {
+                    instructions,
+                    max_stack,
+                    ..
+                } = &mut ir.cfg[*block_idx]
+                {
+                    let block_dispatcher_start = if start >= *block_start {
+                        start - block_start
+                    } else {
+                        0
+                    };
+                    let block_dispatcher_end = if end >= *block_start {
+                        (end - block_start).min(instructions.len())
+                    } else {
+                        0
+                    };
+
+                    if block_dispatcher_start < instructions.len()
+                        && block_dispatcher_end > block_dispatcher_start
+                    {
+                        instructions.drain(block_dispatcher_start..block_dispatcher_end);
+                        *max_stack = (*max_stack).max(needed_stack);
+                    }
+                }
+            }
+
+            // Insert the disguised dispatcher into the first affected block
+            let (first_block_idx, first_block_start, first_block_start_pc) = affected_blocks[0];
+            if let Block::Body { instructions, .. } = &mut ir.cfg[first_block_idx] {
+                let insertion_point = start.saturating_sub(first_block_start);
+
+                for (i, new_instr) in new_instructions.into_iter().enumerate() {
+                    instructions.insert(insertion_point + i, new_instr);
+                }
+            }
+
+            // Update any internal CALL instructions to use tokens
+            self.update_internal_calls(ir, &mapping)?;
+
+            // Update CFG structure and addresses
+            let region_start = first_block_start_pc;
+            ir.update_jump_targets(size_delta, region_start, None)
+                .map_err(TransformError::CoreError)?;
+
+            ir.reindex_pcs().map_err(TransformError::CoreError)?;
+
+            // Rebuild edges for all affected blocks
+            for (block_idx, _, _) in &affected_blocks {
+                ir.rebuild_edges_for_block(*block_idx)
+                    .map_err(TransformError::CoreError)?;
+            }
+
+            // Store the mapping in the CFG bundle
+            ir.selector_mapping = Some(mapping);
+
+            debug!("=== FunctionDispatcher Transform Complete ===");
+            return Ok(true);
         } else {
             debug!("No dispatcher pattern detected - skipping transformation");
         }

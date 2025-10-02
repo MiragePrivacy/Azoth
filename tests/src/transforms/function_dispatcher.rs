@@ -15,7 +15,7 @@ async fn test_token_dispatcher_obfuscation() {
         .try_init();
 
     let bytecode =
-        "0x60003560e01c80637ff36ab514601a578063a9059cbb14602157600080fd5b600080fd5b600080fd";
+        "0x60003560e01c80637ff36ab514601e578063a9059cbb14602357600080fd5b600080fd5b600080fd";
 
     println!("Input bytecode: {}", bytecode);
 

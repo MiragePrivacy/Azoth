@@ -12,6 +12,9 @@ pub enum CfgIrError {
     /// The instruction sequence is invalid (e.g., malformed control flow).
     #[error("invalid instruction sequence")]
     InvalidSequence,
+    /// Block structure is invalid (e.g., JUMPDESTs not aligned with block starts).
+    #[error("invalid block structure: {0}")]
+    InvalidBlockStructure(String),
     /// Decoding error from the `decoder` module.
     #[error("decoding error: {0}")]
     DecodeError(#[from] DecodeError),
