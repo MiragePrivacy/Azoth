@@ -212,6 +212,7 @@ impl FuzzInput {
 enum ErrorKind {
     Obfuscation,
     Validation,
+    ConstructorArgsVisible,
     DeploymentMismatch { original: usize, obfuscated: usize },
 }
 
@@ -220,6 +221,7 @@ impl fmt::Display for ErrorKind {
         match self {
             Self::Obfuscation => write!(f, "obfuscation failed"),
             Self::Validation => write!(f, "validation failed"),
+            Self::ConstructorArgsVisible => write!(f, "constructor arguments remain visible"),
             Self::DeploymentMismatch {
                 original,
                 obfuscated,
@@ -297,18 +299,24 @@ impl FuzzStats {
 }
 
 const MOCK_TOKEN_ADDR: Address = Address::new([0x11; 20]);
-const MOCK_RECIPIENT_ADDR: Address = Address::new([0x22; 20]);
 
-fn prepare_escrow_bytecode(deployment_hex: &str) -> Option<Vec<u8>> {
+fn prepare_escrow_bytecode(deployment_hex: &str, seed: [u8; 32]) -> Option<Vec<u8>> {
     let normalized = deployment_hex.trim().trim_start_matches("0x");
     let mut bytecode = hex::decode(normalized).ok()?;
+    let mut rng = SmallRng::from_seed(seed);
+    let mut recipient = [0u8; 20];
+    let mut expected_amount = [0u8; 32];
+    let mut payment_amount = [0u8; 32];
+    rng.fill_bytes(&mut recipient);
+    rng.fill_bytes(&mut expected_amount);
+    rng.fill_bytes(&mut payment_amount);
     bytecode.extend_from_slice(&[0; 12]);
     bytecode.extend_from_slice(MOCK_TOKEN_ADDR.as_slice());
     bytecode.extend_from_slice(&[0; 12]);
-    bytecode.extend_from_slice(MOCK_RECIPIENT_ADDR.as_slice());
+    bytecode.extend_from_slice(&recipient);
+    bytecode.extend_from_slice(&expected_amount);
     bytecode.extend_from_slice(&[0; 32]);
-    bytecode.extend_from_slice(&[0; 32]);
-    bytecode.extend_from_slice(&[0; 32]);
+    bytecode.extend_from_slice(&payment_amount);
     Some(bytecode)
 }
 
@@ -317,9 +325,9 @@ fn prepare_counter_bytecode(deployment_hex: &str) -> Option<Vec<u8>> {
     hex::decode(normalized).ok()
 }
 
-fn prepare_bytecode(contract: Contract, deployment_hex: &str) -> Option<Vec<u8>> {
+fn prepare_bytecode(contract: Contract, deployment_hex: &str, seed: [u8; 32]) -> Option<Vec<u8>> {
     match contract {
-        Contract::Escrow => prepare_escrow_bytecode(deployment_hex),
+        Contract::Escrow => prepare_escrow_bytecode(deployment_hex, seed),
         Contract::Counter => prepare_counter_bytecode(deployment_hex),
     }
 }
@@ -433,6 +441,15 @@ async fn run_fuzz_input(input: &FuzzInput, check_deploy: bool) -> Result<(), Fuz
     let deployment_hex = input.contract.deployment_hex();
     let runtime_hex = input.contract.runtime_hex();
     let seed = Seed::from_bytes(input.seed_bytes());
+    let original_bytes = prepare_bytecode(input.contract, deployment_hex, input.seed_bytes())
+        .ok_or_else(|| FuzzFailure {
+            kind: ErrorKind::Obfuscation,
+            message: "failed to prepare original bytecode".into(),
+            trace: Vec::new(),
+            obfuscated_bytecode: None,
+            logs: Vec::new(),
+        })?;
+    let full_deployment_hex = format!("0x{}", hex::encode(&original_bytes));
 
     let transforms = build_passes(&input.passes).map_err(|e| FuzzFailure {
         kind: ErrorKind::Obfuscation,
@@ -448,7 +465,7 @@ async fn run_fuzz_input(input: &FuzzInput, check_deploy: bool) -> Result<(), Fuz
         preserve_unknown_opcodes: true,
     };
 
-    let result = obfuscate_bytecode(deployment_hex, runtime_hex, config)
+    let result = obfuscate_bytecode(&full_deployment_hex, runtime_hex, config)
         .await
         .map_err(|e| {
             let kind = if e.message.contains("validation") || e.message.contains("invalid jump") {
@@ -465,25 +482,60 @@ async fn run_fuzz_input(input: &FuzzInput, check_deploy: bool) -> Result<(), Fuz
             }
         })?;
 
+    if input.contract == Contract::Escrow {
+        let base_len = hex::decode(deployment_hex.trim().trim_start_matches("0x"))
+            .map_err(|error| FuzzFailure {
+                kind: ErrorKind::Obfuscation,
+                message: format!("failed to decode base deployment: {error}"),
+                trace: result.trace.clone(),
+                obfuscated_bytecode: Some(result.obfuscated_bytecode.clone()),
+                logs: Vec::new(),
+            })?
+            .len();
+        let args = &original_bytes[base_len..];
+        let obfuscated =
+            hex::decode(result.obfuscated_bytecode.trim_start_matches("0x")).map_err(|error| {
+                FuzzFailure {
+                    kind: ErrorKind::Obfuscation,
+                    message: format!("failed to decode obfuscated deployment: {error}"),
+                    trace: result.trace.clone(),
+                    obfuscated_bytecode: Some(result.obfuscated_bytecode.clone()),
+                    logs: Vec::new(),
+                }
+            })?;
+        if obfuscated.windows(args.len()).any(|window| window == args) {
+            return Err(FuzzFailure {
+                kind: ErrorKind::ConstructorArgsVisible,
+                message: "the complete ABI constructor suffix survived obfuscation".into(),
+                trace: result.trace,
+                obfuscated_bytecode: Some(result.obfuscated_bytecode),
+                logs: Vec::new(),
+            });
+        }
+        for word_index in [0usize, 1, 2, 4] {
+            let word = &args[word_index * 32..(word_index + 1) * 32];
+            if obfuscated.windows(32).any(|window| window == word) {
+                return Err(FuzzFailure {
+                    kind: ErrorKind::ConstructorArgsVisible,
+                    message: format!("constructor ABI word {word_index} survived obfuscation"),
+                    trace: result.trace,
+                    obfuscated_bytecode: Some(result.obfuscated_bytecode),
+                    logs: Vec::new(),
+                });
+            }
+        }
+    }
+
     if !check_deploy {
         return Ok(());
     }
 
-    let original_bytes =
-        prepare_bytecode(input.contract, deployment_hex).ok_or_else(|| FuzzFailure {
-            kind: ErrorKind::Obfuscation,
-            message: "failed to prepare original bytecode".into(),
-            trace: result.trace.clone(),
-            obfuscated_bytecode: Some(result.obfuscated_bytecode.clone()),
-            logs: Vec::new(),
-        })?;
-
     let original_deployed = deploy_to_revm(&original_bytes, input.contract).is_ok();
 
-    let prepared_obfuscated = prepare_bytecode(input.contract, &result.obfuscated_bytecode)
-        .ok_or_else(|| FuzzFailure {
+    let prepared_obfuscated = hex::decode(result.obfuscated_bytecode.trim_start_matches("0x"))
+        .map_err(|error| FuzzFailure {
             kind: ErrorKind::Obfuscation,
-            message: "failed to prepare obfuscated bytecode".into(),
+            message: format!("failed to decode obfuscated bytecode: {error}"),
             trace: result.trace.clone(),
             obfuscated_bytecode: Some(result.obfuscated_bytecode.clone()),
             logs: Vec::new(),

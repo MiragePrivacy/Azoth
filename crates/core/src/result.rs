@@ -67,6 +67,14 @@ pub enum Error {
     #[error("no runtime found")]
     NoRuntimeFound,
 
+    /// The caller-supplied runtime does not occur in the deployment payload.
+    #[error("caller-supplied runtime was not found in deployment bytecode")]
+    SuppliedRuntimeNotFound,
+
+    /// The caller-supplied runtime occurs more than once, so its boundary is ambiguous.
+    #[error("caller-supplied runtime occurs {0} times in deployment bytecode")]
+    AmbiguousRuntimeMatch(usize),
+
     /// Obfuscation operation failed.
     #[error("obfuscation failed: {0}")]
     ObfuscationFailed(String),

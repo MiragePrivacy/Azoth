@@ -1,5 +1,6 @@
 pub mod arithmetic_chain;
 pub mod cluster_shuffle;
+pub mod constructor_args;
 pub mod function_dispatcher;
 pub mod jump_address_transformer;
 pub mod obfuscator;
