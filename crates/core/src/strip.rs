@@ -387,13 +387,16 @@ impl CleanReport {
             );
         }
 
-        if has_constructor_args && original_creation_len != new_creation_len {
+        if original_creation_len != new_creation_len {
             let patched = patch_constructor_arg_base(
                 &mut init_bytes,
                 original_creation_len,
                 new_creation_len,
             )?;
-            if patched == 0 {
+            // A caller may obfuscate bare creation bytecode and append its constructor
+            // arguments afterwards. Patch a supported constructor-copy base whenever it is
+            // present, but only require it when this payload already contains arguments.
+            if patched == 0 && has_constructor_args {
                 return Err(format!(
                     "Could not locate constructor argument base 0x{:x} before CODESIZE/SUB",
                     original_creation_len
@@ -782,5 +785,33 @@ mod tests {
                 .any(|window| window == [0x60, new_tail_len as u8]),
             "init code should be updated to push new runtime tail length (runtime + auxdata)"
         );
+    }
+
+    #[test]
+    fn reassembly_relocates_constructor_base_before_arguments_are_appended() {
+        // The init code retains the runtime length across CODECOPY for RETURN, then contains
+        // Solidity's constructor-data base sequence: PUSH creation_len; DUP1; CODESIZE; SUB.
+        // No argument suffix is present yet, matching callers that append ABI data later.
+        let init = [
+            0x60, 0x03, 0x80, 0x60, 0x0e, 0x5f, 0x39, 0x5f, 0xf3, 0x60, 0x11, 0x80, 0x38, 0x03,
+        ];
+        let runtime = [0x5b, 0x00, 0x00];
+        let bytes = [init.as_slice(), runtime.as_slice()].concat();
+        let sections = vec![
+            section(SectionKind::Init, 0, init.len()),
+            section(SectionKind::Runtime, init.len(), runtime.len()),
+        ];
+        let (_, mut report) = strip_bytecode(&bytes, &sections).unwrap();
+        let grown_runtime = [0x5b, 0x5b, 0x5b, 0x00, 0x00];
+
+        let rebuilt = report.reassemble_checked(&grown_runtime).unwrap();
+
+        assert_eq!(&rebuilt[1..2], &[grown_runtime.len() as u8]);
+        assert_eq!(
+            &rebuilt[9..14],
+            &[0x60, 0x13, 0x80, 0x38, 0x03],
+            "constructor-data base must track the grown creation bytecode"
+        );
+        assert_eq!(&rebuilt[init.len()..], grown_runtime.as_slice());
     }
 }

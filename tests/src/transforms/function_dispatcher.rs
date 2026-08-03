@@ -168,8 +168,11 @@ async fn test_counter_dispatcher_detection() {
         .without_time()
         .try_init();
 
+    // COUNTER_BYTECODE is creation bytecode. Its runtime begins at the CODECOPY offset encoded
+    // by the compiler, 0x1c, and must be supplied separately to preserve runtime-relative PCs.
+    let counter_runtime = &COUNTER_BYTECODE[2 + 0x1c * 2..];
     let (_, instructions, sections, _) =
-        process_bytecode_to_cfg(COUNTER_BYTECODE, false, COUNTER_BYTECODE, false)
+        process_bytecode_to_cfg(COUNTER_BYTECODE, false, counter_runtime, false)
             .await
             .unwrap();
 
@@ -197,7 +200,7 @@ async fn test_counter_dispatcher_detection() {
 
     let result = obfuscate_bytecode(
         COUNTER_BYTECODE,
-        COUNTER_BYTECODE,
+        counter_runtime,
         ObfuscationConfig::default(),
     )
     .await
