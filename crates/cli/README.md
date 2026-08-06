@@ -61,11 +61,13 @@ Applies obfuscation transformations to bytecode.
 azoth obfuscate -D <DEPLOYMENT_BYTECODE> -R <RUNTIME_BYTECODE>
 azoth obfuscate --deployment 0x6080... --runtime 0x6080... --seed 12345
 azoth obfuscate -D path/to/deployment.hex -R path/to/runtime.hex --passes shuffle
+azoth obfuscate -D path/to/deployment.hex -R path/to/runtime.hex --constructor-args 0x...
 ```
 
 Options:
 - `-D, --deployment <BYTECODE>` - Input deployment bytecode (required)
 - `-R, --runtime <BYTECODE>` - Input runtime bytecode (required)
+- `--constructor-args <HEX>` - ABI-encoded constructor suffix to append and obfuscate; omit when `-D` already contains it
 - `--seed <value>` - Cryptographic seed for deterministic obfuscation
 - `--passes <list>` - Comma-separated list of transforms (default: shuffle)
 - `--emit <file>` - Path to write gas/size report as JSON
@@ -73,6 +75,8 @@ Options:
 - `--tui` - Launch TUI to view debug trace after obfuscation
 
 Note: `function_dispatcher` is always applied automatically.
+
+The runtime is used as an exact, authoritative deployment boundary. A supplied runtime that is missing or occurs more than once is rejected. Constructor masking does not parse the ABI and is not cryptographic confidentiality; it removes the stable plaintext suffix while preserving constructor behavior.
 
 ### `azoth analyze`
 Generates multiple obfuscated variants and reports how much of the original bytecode survives unchanged.

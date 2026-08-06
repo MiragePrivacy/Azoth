@@ -11,9 +11,11 @@ Azoth is a deterministic EVM bytecode obfuscator designed to make Mirage's execu
 
 2. Transformation: apply deterministic transformations (e.g dispatcher transforms, block shuffling etc.) that changes the structure of the bytecode without blowing gas or size limits.
 
-3. Recovery: lower the rewritten runtime alongside untouched init/constructor data so the final bytecode stays deployable.
+3. Recovery: lower the rewritten runtime, patch init-code offsets, and mask any exact constructor-argument suffix so the final bytecode stays deployable without retaining an ABI-aligned plaintext tail.
 
 Azoth also incorporates a formal verification system that provides mathematical guarantees of functional equivalence between original and obfuscated contracts.
+
+Constructor-argument masking is an obfuscation boundary, not encryption: it defeats verbatim static suffix recovery, but public creation code can still be analyzed or executed to recover values. See the [constructor-argument security and benchmark report](docs/constructor-argument-obfuscation.md).
 
 ## Status
 

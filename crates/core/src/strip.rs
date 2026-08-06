@@ -134,6 +134,63 @@ struct PushInfo {
     value: usize,
 }
 
+fn opcode_positions(bytes: &[u8], target: u8) -> Vec<usize> {
+    let mut positions = Vec::new();
+    let mut pc = 0usize;
+    while pc < bytes.len() {
+        let opcode = bytes[pc];
+        if opcode == target {
+            positions.push(pc);
+        }
+        pc += if (0x60..=0x7f).contains(&opcode) {
+            1 + (opcode - 0x5f) as usize
+        } else {
+            1
+        };
+    }
+    positions
+}
+
+fn patch_constructor_arg_base(
+    bytes: &mut [u8],
+    old_value: usize,
+    new_value: usize,
+) -> Result<usize, String> {
+    let mut patched = 0usize;
+    let mut pc = 0usize;
+    while pc < bytes.len() {
+        let opcode = bytes[pc];
+        if !(0x60..=0x7f).contains(&opcode) {
+            pc += 1;
+            continue;
+        }
+
+        let width = (opcode - 0x5f) as usize;
+        let end = pc + 1 + width;
+        if end > bytes.len() {
+            break;
+        }
+        let value = bytes[pc + 1..end]
+            .iter()
+            .fold(0usize, |acc, &byte| (acc << 8) | byte as usize);
+        let is_constructor_length = bytes.get(end..end + 3) == Some(&[0x80, 0x38, 0x03]);
+        if value == old_value && is_constructor_length {
+            if width < std::mem::size_of::<usize>() && new_value >= (1usize << (width * 8)) {
+                return Err(format!(
+                    "constructor argument base 0x{new_value:x} does not fit in PUSH{width}"
+                ));
+            }
+            for index in 0..width {
+                let shift = (width - 1 - index) * 8;
+                bytes[pc + 1 + index] = ((new_value >> shift) & 0xff) as u8;
+            }
+            patched += 1;
+        }
+        pc = end;
+    }
+    Ok(patched)
+}
+
 impl CleanReport {
     /// Updates init code CODECOPY and RETURN parameters to reflect new runtime length and offset.
     ///
@@ -157,30 +214,44 @@ impl CleanReport {
             self.clean_len
         );
 
-        // Find Init section in removed
-        let new_runtime_offset = self
+        let original_runtime_offset = self
             .runtime_layout
             .iter()
             .map(|span| span.offset)
             .min()
             .ok_or("No runtime layout found")?;
-
-        let runtime_offset = new_runtime_offset;
-        let post_runtime_len: usize = self
+        let new_runtime_offset: usize = self
             .removed
             .iter()
-            .filter(|removed| removed.offset >= runtime_offset)
+            .filter(|removed| removed.offset < original_runtime_offset)
             .map(|removed| removed.data.len())
             .sum();
-        let runtime_tail_len = new_runtime_len + post_runtime_len;
-        let original_runtime_tail_len = self.clean_len + post_runtime_len;
+        let deployed_suffix_len: usize = self
+            .removed
+            .iter()
+            .filter(|removed| {
+                removed.offset >= original_runtime_offset
+                    && !matches!(removed.kind, SectionKind::ConstructorArgs)
+            })
+            .map(|removed| removed.data.len())
+            .sum();
+        let new_deployed_runtime_len = new_runtime_len + deployed_suffix_len;
+        let original_deployed_runtime_len = self.clean_len + deployed_suffix_len;
+        let original_creation_len = original_runtime_offset + original_deployed_runtime_len;
+        let new_creation_len = new_runtime_offset + new_deployed_runtime_len;
+        let has_constructor_args = self
+            .removed
+            .iter()
+            .any(|removed| matches!(removed.kind, SectionKind::ConstructorArgs));
 
         tracing::debug!(
-            "Calculated values: runtime_offset={}, post_runtime_len={}, runtime_tail_len={}, original_runtime_tail_len={}",
-            runtime_offset,
-            post_runtime_len,
-            runtime_tail_len,
-            original_runtime_tail_len
+            "Calculated values: runtime_offset={} -> {}, deployed_runtime_len={} -> {}, creation_len={} -> {}",
+            original_runtime_offset,
+            new_runtime_offset,
+            original_deployed_runtime_len,
+            new_deployed_runtime_len,
+            original_creation_len,
+            new_creation_len
         );
 
         let init_section = self
@@ -265,38 +336,39 @@ impl CleanReport {
             Ok(())
         }
 
-        let codecopy_positions: Vec<_> = init_bytes
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, &b)| (b == 0x39).then_some(idx))
-            .collect();
+        let codecopy_positions = opcode_positions(&init_bytes, 0x39);
 
-        let mut codecopy_patched = false;
+        let mut codecopy_patched = original_runtime_offset == new_runtime_offset
+            && original_deployed_runtime_len == new_deployed_runtime_len;
         for pos in codecopy_positions {
             let pushes = collect_previous_pushes(&init_bytes, pos, 6);
             let has_len = pushes
                 .iter()
-                .any(|info| info.value == original_runtime_tail_len);
-            let has_offset = pushes.iter().any(|info| info.value == runtime_offset);
+                .any(|info| info.value == original_deployed_runtime_len);
+            let has_offset = pushes
+                .iter()
+                .any(|info| info.value == original_runtime_offset);
             if !(has_len && has_offset) {
                 continue;
             }
 
             for info in &pushes {
-                if info.value == original_runtime_tail_len {
-                    write_push_value(&mut init_bytes, info, runtime_tail_len)?;
+                if info.value == original_deployed_runtime_len {
+                    write_push_value(&mut init_bytes, info, new_deployed_runtime_len)?;
                     codecopy_patched = true;
                     tracing::debug!(
                         "Updated CODECOPY length PUSH at 0x{:x} to 0x{:x}",
                         info.pos,
-                        runtime_tail_len
+                        new_deployed_runtime_len
                     );
                     break;
                 }
             }
 
             for info in &pushes {
-                if info.value == runtime_offset && new_runtime_offset != runtime_offset {
+                if info.value == original_runtime_offset
+                    && new_runtime_offset != original_runtime_offset
+                {
                     write_push_value(&mut init_bytes, info, new_runtime_offset)?;
                     tracing::debug!(
                         "Updated CODECOPY offset PUSH at 0x{:x} to 0x{:x}",
@@ -315,82 +387,55 @@ impl CleanReport {
             );
         }
 
-        let original_total_len = runtime_offset + original_runtime_tail_len;
-        let new_total_len = new_runtime_offset + runtime_tail_len;
-        if original_total_len != new_total_len {
-            let mut idx = 0usize;
-            let mut total_patched = false;
-            while idx < init_bytes.len() {
-                let opcode = init_bytes[idx];
-                if (0x60..=0x7f).contains(&opcode) {
-                    let width = (opcode - 0x60 + 1) as usize;
-                    if idx + 1 + width <= init_bytes.len() {
-                        let mut value = 0usize;
-                        for &byte in &init_bytes[idx + 1..idx + 1 + width] {
-                            value = (value << 8) | byte as usize;
-                        }
-                        if value == original_total_len {
-                            let info = PushInfo {
-                                pos: idx,
-                                width,
-                                value,
-                            };
-                            write_push_value(&mut init_bytes, &info, new_total_len)?;
-                            total_patched = true;
-                            tracing::debug!(
-                                "Updated total bytecode size PUSH at 0x{:x} to 0x{:x}",
-                                idx,
-                                new_total_len
-                            );
-                            break;
-                        }
-                    }
-                    idx += width + 1;
-                } else {
-                    idx += 1;
-                }
-            }
-
-            if !total_patched {
-                tracing::warn!(
-                    "Expected to update init metadata length (0x{:x}) but no PUSH matched",
-                    original_total_len
-                );
+        if original_creation_len != new_creation_len {
+            let patched = patch_constructor_arg_base(
+                &mut init_bytes,
+                original_creation_len,
+                new_creation_len,
+            )?;
+            // A caller may obfuscate bare creation bytecode and append its constructor
+            // arguments afterwards. Patch a supported constructor-copy base whenever it is
+            // present, but only require it when this payload already contains arguments.
+            if patched == 0 && has_constructor_args {
+                return Err(format!(
+                    "Could not locate constructor argument base 0x{:x} before CODESIZE/SUB",
+                    original_creation_len
+                ));
             }
         }
 
-        let return_positions: Vec<_> = init_bytes
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, &b)| (b == 0xf3).then_some(idx))
-            .collect();
+        let return_positions = opcode_positions(&init_bytes, 0xf3);
 
-        let mut return_patched = false;
+        let mut return_patched = original_deployed_runtime_len == new_deployed_runtime_len;
         for pos in return_positions {
             let pushes = collect_previous_pushes(&init_bytes, pos, 4);
-            if let Some(info) = pushes
-                .iter()
-                .find(|info| info.value == original_runtime_tail_len)
-            {
-                write_push_value(&mut init_bytes, info, runtime_tail_len)?;
+            if let Some(info) = pushes.iter().find(|info| {
+                info.value == original_deployed_runtime_len
+                    || info.value == new_deployed_runtime_len
+            }) {
+                if info.value == original_deployed_runtime_len {
+                    write_push_value(&mut init_bytes, info, new_deployed_runtime_len)?;
+                }
                 return_patched = true;
                 tracing::debug!(
                     "Updated RETURN length PUSH at 0x{:x} to 0x{:x}",
                     info.pos,
-                    runtime_tail_len
+                    new_deployed_runtime_len
                 );
                 break;
             }
         }
 
         if !return_patched {
-            return Err("Could not find RETURN length PUSH to update".into());
+            tracing::debug!(
+                "RETURN reuses the CODECOPY length already patched on the constructor stack"
+            );
         }
 
         tracing::debug!(
             "Updated init code CODECOPY/RETURN for runtime offset=0x{:x}, len=0x{:x}",
             new_runtime_offset,
-            new_runtime_len
+            new_deployed_runtime_len
         );
 
         init_section.data = Bytes::from(init_bytes);
@@ -507,255 +552,90 @@ impl CleanReport {
         Ok(())
     }
 
-    /// Reassemble bytecode by placing the clean runtime at original offsets
-    /// and filling removed sections with their original data.
-    pub fn reassemble(&mut self, clean: &[u8]) -> Vec<u8> {
-        // Check if runtime length changed and update init code if needed
+    /// Reassemble bytecode and return an error if changed init-code constants cannot be patched.
+    ///
+    /// Obfuscation pipelines should use this checked form so a layout Azoth cannot safely lower
+    /// is rejected instead of producing deployment bytecode with stale offsets.
+    pub fn reassemble_checked(&mut self, clean: &[u8]) -> Result<Vec<u8>, String> {
         let original_runtime_len = self.clean_len;
         let new_runtime_len = clean.len();
-
         tracing::debug!(
             "reassemble: original_runtime_len={}, new_runtime_len={}",
             original_runtime_len,
             new_runtime_len
         );
 
-        if new_runtime_len != original_runtime_len {
-            tracing::debug!(
-                "Runtime length changed from {} to {} bytes, updating init code",
-                original_runtime_len,
-                new_runtime_len
-            );
+        let runtime_start_offset = self
+            .runtime_layout
+            .iter()
+            .map(|span| span.offset)
+            .min()
+            .unwrap_or(0);
+        let actual_runtime_start_offset: usize = self
+            .removed
+            .iter()
+            .filter(|removed| removed.offset < runtime_start_offset)
+            .map(|removed| removed.data.len())
+            .sum();
+        let layout_changed = new_runtime_len != original_runtime_len
+            || actual_runtime_start_offset != runtime_start_offset;
 
-            if let Err(e) = self.update_init_code_size(new_runtime_len) {
-                tracing::warn!("Targeted init code patching failed: {}", e);
-                tracing::warn!("Will attempt fallback patching during reassembly");
-            }
-        }
-        // Check if runtime size changed - if so, use simple sequential assembly
-        let runtime_size_changed = clean.len() != original_runtime_len;
-
-        if runtime_size_changed {
-            tracing::debug!(
-                "Runtime size changed - using sequential reassembly: prefix + runtime + suffix"
-            );
-
-            // Get the original runtime start offset to determine prefix/suffix split
-            let runtime_start_offset = self
-                .runtime_layout
-                .iter()
-                .map(|span| span.offset)
-                .min()
-                .unwrap_or(0);
-
-            tracing::debug!(
-                "Original runtime started at offset {}, preserving prefix structure",
-                runtime_start_offset
-            );
-
-            let mut out = Vec::new();
-
-            // Sort removed sections by their original offset
-            let mut sorted_removed = self.removed.clone();
-            sorted_removed.sort_by_key(|r| r.offset);
-
-            // Compute suffix size to keep track of metadata lengths
-            let post_runtime_len: usize = sorted_removed
-                .iter()
-                .filter(|removed| removed.offset >= runtime_start_offset)
-                .map(|removed| removed.data.len())
-                .sum();
-
-            // Add all sections that were BEFORE the runtime (prefix: init + any padding/constructor args)
-            for removed in &sorted_removed {
-                if removed.offset < runtime_start_offset {
-                    out.extend_from_slice(&removed.data);
-                    tracing::debug!(
-                        "Added pre-runtime {:?} section: {} bytes (original offset: {})",
-                        removed.kind,
-                        removed.data.len(),
-                        removed.offset
-                    );
-                }
-            }
-
-            // Add obfuscated runtime
-            out.extend_from_slice(clean);
-            tracing::debug!("Added runtime code: {} bytes", clean.len());
-
-            // Add all sections that were AFTER the runtime (suffix: auxdata, etc.)
-            for removed in &sorted_removed {
-                if removed.offset >= runtime_start_offset {
-                    out.extend_from_slice(&removed.data);
-                    tracing::debug!(
-                        "Added post-runtime {:?} section: {} bytes (original offset: {})",
-                        removed.kind,
-                        removed.data.len(),
-                        removed.offset
-                    );
-                }
-            }
-
-            // here, we take the final constructor prefix (prefix), looks for any PUSH immediates still holding
-            // the old runtime length or the old total bytecode length, and rewrites them to the new valuesright
-            // before the output is returned
-            let prefix_end = runtime_start_offset.min(out.len());
-            let (prefix, _) = out.split_at_mut(prefix_end);
-            let original_tail_len = self.clean_len + post_runtime_len;
-            let new_tail_len = clean.len() + post_runtime_len;
-            let original_total_len = runtime_start_offset + original_tail_len;
-            let new_total_len = runtime_start_offset + new_tail_len;
-
-            if original_tail_len != new_tail_len {
-                let replaced = patch_push_value(prefix, original_tail_len, new_tail_len, Some(1));
-                if replaced == 0 {
-                    tracing::warn!(
-                        "Failed to update CODECOPY length from 0x{:x} to 0x{:x} in final bytecode",
-                        original_tail_len,
-                        new_tail_len
-                    );
-                }
-            }
-
-            if original_total_len != new_total_len {
-                let replaced = patch_push_value(prefix, original_total_len, new_total_len, Some(1));
-                if replaced == 0 {
-                    tracing::warn!(
-                        "Failed to update total bytecode size from 0x{:x} to 0x{:x} in final bytecode",
-                        original_total_len,
-                        new_total_len
-                    );
-                }
-            }
-
-            tracing::debug!("Sequential reassembly complete: {} bytes total", out.len());
-            out
-        } else {
-            // Original logic for unchanged runtime size
-            let max_runtime_end = self
-                .runtime_layout
-                .iter()
-                .map(|span| span.offset + span.len)
-                .max()
-                .unwrap_or(0);
-
-            let max_removed_end = self
+        if layout_changed
+            && self
                 .removed
                 .iter()
-                .map(|r| r.offset + r.data.len())
-                .max()
-                .unwrap_or(0);
-
-            let required_size = max_runtime_end.max(max_removed_end).max(clean.len());
-
-            tracing::debug!(
-                "Reassembling: clean_len={}, bytes_saved={}, required_size={}",
-                clean.len(),
-                self.bytes_saved,
-                required_size
-            );
-
-            let mut out = vec![0u8; required_size];
-
-            // Copy clean runtime to original positions
-            let mut clean_pos = 0;
-            for span in &self.runtime_layout {
-                let end_pos = clean_pos + span.len;
-                if end_pos <= clean.len() && span.offset + span.len <= out.len() {
-                    out[span.offset..span.offset + span.len]
-                        .copy_from_slice(&clean[clean_pos..end_pos]);
-                    clean_pos = end_pos;
-                } else {
-                    tracing::error!(
-                        "Reassembly bounds error: clean_pos={}, span.offset={}, span.len={}, out.len()={}",
-                        clean_pos,
-                        span.offset,
-                        span.len,
-                        out.len()
-                    );
-                }
-            }
-
-            // Restore removed sections (constructor, auxdata, etc.)
-            for removed in &self.removed {
-                if removed.offset + removed.data.len() <= out.len() {
-                    out[removed.offset..removed.offset + removed.data.len()]
-                        .copy_from_slice(&removed.data);
-                } else {
-                    tracing::error!(
-                        "Reassembly bounds error: removed.offset={}, removed.data.len()={}, out.len()={}",
-                        removed.offset,
-                        removed.data.len(),
-                        out.len()
-                    );
-                }
-            }
-
-            out
+                .any(|removed| matches!(removed.kind, SectionKind::Init))
+        {
+            self.update_init_code_size(new_runtime_len)?;
         }
-    }
-}
 
-fn patch_push_value(
-    bytes: &mut [u8],
-    old_value: usize,
-    new_value: usize,
-    max_replacements: Option<usize>,
-) -> usize {
-    if old_value == new_value {
-        return 0;
+        Ok(self.assemble_sequential(clean, runtime_start_offset))
     }
 
-    let mut replaced = 0usize;
-    let mut idx = 0usize;
-    while idx < bytes.len() {
-        let opcode = bytes[idx];
-        if (0x60..=0x7f).contains(&opcode) {
-            let width = (opcode - 0x60 + 1) as usize;
-            if idx + 1 + width <= bytes.len() {
-                let mut value = 0usize;
-                for &byte in &bytes[idx + 1..idx + 1 + width] {
-                    value = (value << 8) | byte as usize;
-                }
-                if value == old_value {
-                    if width < std::mem::size_of::<usize>() {
-                        let max = (1usize << (width * 8)) - 1;
-                        if new_value > max {
-                            tracing::warn!(
-                                "New value 0x{:x} does not fit in PUSH{} at 0x{:x}",
-                                new_value,
-                                width,
-                                idx
-                            );
-                            idx += width + 1;
-                            continue;
-                        }
-                    }
-                    let bit_width = usize::BITS as usize;
-                    for j in 0..width {
-                        let shift = j * 8;
-                        let byte = if shift >= bit_width {
-                            0
-                        } else {
-                            ((new_value >> shift) & 0xff) as u8
-                        };
-                        bytes[idx + 1 + width - 1 - j] = byte;
-                    }
-                    replaced += 1;
-                    if let Some(limit) = max_replacements
-                        && replaced >= limit
-                    {
-                        break;
-                    }
-                }
+    /// Reassemble bytecode, retaining the historical best-effort behavior for library callers.
+    /// Prefer [`Self::reassemble_checked`] when returning malformed deployment code is unsafe.
+    pub fn reassemble(&mut self, clean: &[u8]) -> Vec<u8> {
+        match self.reassemble_checked(clean) {
+            Ok(output) => output,
+            Err(error) => {
+                tracing::warn!("Targeted init code patching failed: {}", error);
+                let runtime_start_offset = self
+                    .runtime_layout
+                    .iter()
+                    .map(|span| span.offset)
+                    .min()
+                    .unwrap_or(0);
+                self.assemble_sequential(clean, runtime_start_offset)
             }
-            idx += width + 1;
-        } else {
-            idx += 1;
         }
     }
 
-    replaced
+    fn assemble_sequential(&self, clean: &[u8], runtime_start_offset: usize) -> Vec<u8> {
+        let mut sorted_removed = self.removed.clone();
+        sorted_removed.sort_by_key(|removed| removed.offset);
+        let mut out = Vec::with_capacity(
+            sorted_removed
+                .iter()
+                .map(|removed| removed.data.len())
+                .sum::<usize>()
+                + clean.len(),
+        );
+
+        for removed in &sorted_removed {
+            if removed.offset < runtime_start_offset {
+                out.extend_from_slice(&removed.data);
+            }
+        }
+        out.extend_from_slice(clean);
+        for removed in &sorted_removed {
+            if removed.offset >= runtime_start_offset {
+                out.extend_from_slice(&removed.data);
+            }
+        }
+
+        tracing::debug!("Sequential reassembly complete: {} bytes total", out.len());
+        out
+    }
 }
 
 #[cfg(test)]
@@ -905,5 +785,33 @@ mod tests {
                 .any(|window| window == [0x60, new_tail_len as u8]),
             "init code should be updated to push new runtime tail length (runtime + auxdata)"
         );
+    }
+
+    #[test]
+    fn reassembly_relocates_constructor_base_before_arguments_are_appended() {
+        // The init code retains the runtime length across CODECOPY for RETURN, then contains
+        // Solidity's constructor-data base sequence: PUSH creation_len; DUP1; CODESIZE; SUB.
+        // No argument suffix is present yet, matching callers that append ABI data later.
+        let init = [
+            0x60, 0x03, 0x80, 0x60, 0x0e, 0x5f, 0x39, 0x5f, 0xf3, 0x60, 0x11, 0x80, 0x38, 0x03,
+        ];
+        let runtime = [0x5b, 0x00, 0x00];
+        let bytes = [init.as_slice(), runtime.as_slice()].concat();
+        let sections = vec![
+            section(SectionKind::Init, 0, init.len()),
+            section(SectionKind::Runtime, init.len(), runtime.len()),
+        ];
+        let (_, mut report) = strip_bytecode(&bytes, &sections).unwrap();
+        let grown_runtime = [0x5b, 0x5b, 0x5b, 0x00, 0x00];
+
+        let rebuilt = report.reassemble_checked(&grown_runtime).unwrap();
+
+        assert_eq!(&rebuilt[1..2], &[grown_runtime.len() as u8]);
+        assert_eq!(
+            &rebuilt[9..14],
+            &[0x60, 0x13, 0x80, 0x38, 0x03],
+            "constructor-data base must track the grown creation bytecode"
+        );
+        assert_eq!(&rebuilt[init.len()..], grown_runtime.as_slice());
     }
 }

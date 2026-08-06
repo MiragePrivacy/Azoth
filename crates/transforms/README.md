@@ -13,6 +13,12 @@ The transforms crate implements a pass-based architecture where each transformat
 
 ## Current Transforms
 
+### Constructor arguments (`constructor_args.rs`)
+
+When the deployment payload contains bytes after the exact caller-supplied runtime, the pipeline masks every byte of that suffix and injects a seed-varied init-code decoder. Detection uses the complete runtime as an authoritative boundary and does not inspect the ABI, source, address shapes, or zero padding. Unsupported or ambiguous constructor copy layouts fail closed instead of returning plaintext arguments. This pass is automatic and is reported as `ConstructorArgs` in result metadata.
+
+The bytecode contains everything required to reverse the mask, so this is obfuscation against literal/static recovery rather than encryption. Trampoline form, chunk order, arithmetic mask synthesis, and constants vary with the seed; no marker or fixed decoder byte string is emitted.
+
 ### Shuffle (`shuffle.rs`)
 
 Reorders basic blocks within the CFG while updating jump targets to maintain correctness. Simple block-level randomization that changes program layout without affecting execution.

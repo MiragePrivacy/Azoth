@@ -25,6 +25,10 @@ pub struct ObfuscateArgs {
     /// Input runtime bytecode as a hex string, .hex file, or binary file containing EVM bytecode.
     #[arg(short = 'R', long = "runtime")]
     pub runtime_bytecode: String,
+    /// ABI-encoded constructor argument suffix to append before obfuscation.
+    /// May be omitted when the deployment input already contains the suffix.
+    #[arg(long, value_name = "HEX")]
+    constructor_args: Option<String>,
     /// Cryptographic seed for deterministic obfuscation.
     #[arg(long)]
     seed: Option<String>,
@@ -50,6 +54,7 @@ impl super::Command for ObfuscateArgs {
         let ObfuscateArgs {
             deployment_bytecode,
             runtime_bytecode,
+            constructor_args,
             seed,
             passes,
             emit,
@@ -58,8 +63,13 @@ impl super::Command for ObfuscateArgs {
         } = self;
 
         // Step 1: Read and normalize input
-        let input_bytecode = read_input(&deployment_bytecode)?;
+        let mut input_bytecode = read_input(&deployment_bytecode)?;
         let runtime_bytecode_hex = read_input(&runtime_bytecode)?;
+        if let Some(constructor_args) = constructor_args {
+            let deployment = normalise_hex(&input_bytecode)?;
+            let args = normalise_hex(&constructor_args)?;
+            input_bytecode = format!("0x{deployment}{args}");
+        }
 
         // Step 2: Build transforms from CLI args
         let transforms = build_passes(&passes)?;

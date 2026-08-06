@@ -1,4 +1,5 @@
 use crate::arithmetic_chain::ArithmeticChain;
+use crate::constructor_args::obfuscate_constructor_args;
 use crate::function_dispatcher::FunctionDispatcher;
 use crate::push_split::PushSplit;
 use crate::slot_shuffle::SlotShuffle;
@@ -12,6 +13,9 @@ use azoth_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+
+const MAX_INITCODE_SIZE: usize = 49_152;
+const MAX_RUNTIME_CODE_SIZE: usize = 24_576;
 
 /// Error from the obfuscation pipeline, including a partial trace for debugging.
 #[derive(Debug)]
@@ -127,6 +131,15 @@ pub struct ObfuscationMetadata {
     pub size_limit_exceeded: bool,
     /// Whether unknown opcodes were preserved
     pub unknown_opcodes_preserved: bool,
+    /// Whether an exact constructor-argument suffix was masked and decoded during init.
+    #[serde(default)]
+    pub constructor_args_obfuscated: bool,
+    /// Number of constructor-argument bytes masked in the creation payload.
+    #[serde(default)]
+    pub constructor_argument_bytes: usize,
+    /// Number of seed-varied decoder bytes inserted into init code.
+    #[serde(default)]
+    pub constructor_decoder_bytes: usize,
 }
 
 /// Main obfuscation pipeline
@@ -666,8 +679,26 @@ pub async fn obfuscate_bytecode(
         }
     }
 
+    // Step 7c: Mask an exact constructor-argument suffix and inject a seed-varied decoder.
+    // This runs after init immutable patching so its insertion can remap all existing init jumps
+    // once. It fails closed when arguments exist but their copy site is unsupported.
+    let constructor_args =
+        obfuscate_constructor_args(&mut cfg_ir.clean_report, config.seed.as_bytes())
+            .map_err(|e| ObfuscationError::from_err(e, &cfg_ir.trace))?;
+    if constructor_args.applied {
+        transforms_applied.push("ConstructorArgs".to_string());
+        tracing::debug!(
+            "  Obfuscated {} constructor argument bytes with a {}-byte decoder",
+            constructor_args.argument_bytes,
+            constructor_args.decoder_bytes
+        );
+    }
+
     // Step 8: Reassemble final bytecode (init + runtime with data section + auxdata)
-    let final_bytecode = cfg_ir.clean_report.reassemble(&obfuscated_bytes);
+    let final_bytecode = cfg_ir
+        .clean_report
+        .reassemble_checked(&obfuscated_bytes)
+        .map_err(|error| ObfuscationError::from_err(error, &cfg_ir.trace))?;
     let obfuscated_size = final_bytecode.len();
 
     // CRITICAL DEBUGGING: Compare final bytecode to original
@@ -713,14 +744,35 @@ pub async fn obfuscate_bytecode(
     tracing::debug!("  Obfuscated gas: {}", obfuscated_gas);
     tracing::debug!("  Gas delta: {:+}", gas_delta);
 
-    // Step 10: Check size limits
+    // Step 10: Enforce protocol size limits. Constructor arguments are part of the creation
+    // transaction's initcode for EIP-3860 accounting, while compiler auxdata is part of the
+    // EIP-170 deployed-code limit.
     let size_increase_percentage = if original_size > 0 {
         ((obfuscated_size as f64 - original_size as f64) / original_size as f64) * 100.0
     } else {
         0.0
     };
-
-    let size_limit_exceeded = false;
+    let deployed_suffix_size: usize = sections
+        .iter()
+        .filter(|section| {
+            matches!(
+                section.kind,
+                detection::SectionKind::Auxdata | detection::SectionKind::Padding
+            )
+        })
+        .map(|section| section.len)
+        .sum();
+    let deployed_runtime_size = obfuscated_bytes.len() + deployed_suffix_size;
+    let size_limit_exceeded =
+        obfuscated_size > MAX_INITCODE_SIZE || deployed_runtime_size > MAX_RUNTIME_CODE_SIZE;
+    if size_limit_exceeded {
+        return Err(ObfuscationError::from_err(
+            format!(
+                "obfuscated bytecode exceeds an EVM size limit: initcode {obfuscated_size}/{MAX_INITCODE_SIZE} bytes, deployed runtime {deployed_runtime_size}/{MAX_RUNTIME_CODE_SIZE} bytes"
+            ),
+            &cfg_ir.trace,
+        ));
+    }
 
     // Step 11: Build result
     tracing::debug!("=== Building ObfuscationResult ===");
@@ -760,6 +812,9 @@ pub async fn obfuscate_bytecode(
             transforms_applied,
             size_limit_exceeded,
             unknown_opcodes_preserved: config.preserve_unknown_opcodes,
+            constructor_args_obfuscated: constructor_args.applied,
+            constructor_argument_bytes: constructor_args.argument_bytes,
+            constructor_decoder_bytes: constructor_args.decoder_bytes,
         },
         selector_mapping: cfg_ir.selector_mapping,
         trace,
@@ -870,6 +925,12 @@ pub fn print_obfuscation_analysis(result: &ObfuscationResult) {
     if result.instructions_added > 0 {
         println!("Instructions added: {}", result.instructions_added);
     }
+    if result.metadata.constructor_args_obfuscated {
+        println!(
+            "Constructor arguments: {} bytes obfuscated, {} decoder bytes",
+            result.metadata.constructor_argument_bytes, result.metadata.constructor_decoder_bytes
+        );
+    }
 
     // Print success summary
     if result.unknown_opcodes_count > 0 {
@@ -904,6 +965,9 @@ pub fn create_gas_report(result: &ObfuscationResult) -> serde_json::Value {
         "blocks_created": result.blocks_created,
         "instructions_added": result.instructions_added,
         "transforms_applied": result.metadata.transforms_applied,
+        "constructor_args_obfuscated": result.metadata.constructor_args_obfuscated,
+        "constructor_argument_bytes": result.metadata.constructor_argument_bytes,
+        "constructor_decoder_bytes": result.metadata.constructor_decoder_bytes,
         "notes": if result.unknown_opcodes_count > 0 {
             "Unknown opcodes were preserved as raw bytes to maintain functionality"
         } else {

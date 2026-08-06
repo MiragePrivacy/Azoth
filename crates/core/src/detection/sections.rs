@@ -47,6 +47,16 @@ pub fn locate_sections(
     instructions: &[Instruction],
     runtime_bytes: &[u8],
 ) -> Result<Vec<Section>, Error> {
+    // A caller-supplied runtime is an authoritative boundary marker. Matching the complete
+    // runtime avoids interpreting ABI words at the end of a creation payload as a CBOR length
+    // and, unlike the fallback detector below, does not infer constructor arguments from an
+    // opcode pattern.
+    if !runtime_bytes.is_empty() {
+        let sections = locate_sections_from_exact_runtime(deployment_bytes, runtime_bytes)?;
+        validate_sections(&sections, deployment_bytes.len())?;
+        return Ok(sections);
+    }
+
     let mut sections = Vec::new();
     let total_len = deployment_bytes.len();
 
@@ -238,6 +248,76 @@ pub fn locate_sections(
     validate_sections(&sections, total_len)?;
 
     tracing::debug!("Sections validation passed: {:?}", sections);
+    Ok(sections)
+}
+
+/// Builds deployment sections from an exact runtime byte sequence supplied by the caller.
+///
+/// Solidity appends constructor arguments after the complete compiler-generated creation
+/// bytecode. The runtime (including its CBOR trailer) therefore gives two exact boundaries:
+/// its first byte ends init code, and its final byte begins the constructor-argument suffix.
+/// This path deliberately performs no ABI decoding and supports static and dynamic arguments
+/// alike.
+fn locate_sections_from_exact_runtime(
+    deployment_bytes: &[u8],
+    runtime_bytes: &[u8],
+) -> Result<Vec<Section>, Error> {
+    if runtime_bytes.is_empty() || runtime_bytes.len() > deployment_bytes.len() {
+        return Err(Error::SuppliedRuntimeNotFound);
+    }
+
+    let matches: Vec<usize> = deployment_bytes
+        .windows(runtime_bytes.len())
+        .enumerate()
+        .filter_map(|(offset, window)| (window == runtime_bytes).then_some(offset))
+        .collect();
+    let runtime_start = match matches.as_slice() {
+        [offset] => *offset,
+        [] => return Err(Error::SuppliedRuntimeNotFound),
+        _ => return Err(Error::AmbiguousRuntimeMatch(matches.len())),
+    };
+    let runtime_end = runtime_start + runtime_bytes.len();
+    let runtime_auxdata = detect_auxdata(runtime_bytes);
+    let runtime_code_len = runtime_auxdata
+        .map(|(offset, _)| offset)
+        .unwrap_or(runtime_bytes.len());
+
+    let mut sections = Vec::with_capacity(4);
+    if runtime_start > 0 {
+        sections.push(Section {
+            kind: SectionKind::Init,
+            offset: 0,
+            len: runtime_start,
+        });
+    }
+    if runtime_code_len > 0 {
+        sections.push(Section {
+            kind: SectionKind::Runtime,
+            offset: runtime_start,
+            len: runtime_code_len,
+        });
+    }
+    if let Some((aux_offset, aux_len)) = runtime_auxdata {
+        sections.push(Section {
+            kind: SectionKind::Auxdata,
+            offset: runtime_start + aux_offset,
+            len: aux_len,
+        });
+    }
+    if runtime_end < deployment_bytes.len() {
+        sections.push(Section {
+            kind: SectionKind::ConstructorArgs,
+            offset: runtime_end,
+            len: deployment_bytes.len() - runtime_end,
+        });
+    }
+
+    tracing::debug!(
+        "Exact runtime layout: runtime_start={}, runtime_end={}, constructor_args={}",
+        runtime_start,
+        runtime_end,
+        deployment_bytes.len().saturating_sub(runtime_end)
+    );
     Ok(sections)
 }
 
@@ -590,5 +670,49 @@ mod tests {
         // Total: 53 bytes (from offset 35 to end at 88)
         assert_eq!(auxdata_offset, 35);
         assert_eq!(auxdata_length, 53);
+    }
+
+    #[test]
+    fn exact_runtime_places_constructor_args_after_auxdata() {
+        let runtime = vec![0x60, 0x00, 0x00, 0xa1, 0x01, 0x02, 0x00, 0x03];
+        let mut deployment = vec![0x60, 0x00, 0xf3];
+        deployment.extend_from_slice(&runtime);
+        deployment.extend_from_slice(&[0xabu8; 64]);
+
+        let sections = locate_sections_from_exact_runtime(&deployment, &runtime).unwrap();
+        assert_eq!(
+            sections,
+            vec![
+                Section {
+                    kind: SectionKind::Init,
+                    offset: 0,
+                    len: 3,
+                },
+                Section {
+                    kind: SectionKind::Runtime,
+                    offset: 3,
+                    len: 3,
+                },
+                Section {
+                    kind: SectionKind::Auxdata,
+                    offset: 6,
+                    len: 5,
+                },
+                Section {
+                    kind: SectionKind::ConstructorArgs,
+                    offset: 11,
+                    len: 64,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn exact_runtime_rejects_ambiguous_boundaries() {
+        let runtime = vec![0x60, 0x00, 0x00];
+        let deployment = [runtime.as_slice(), runtime.as_slice()].concat();
+
+        let error = locate_sections_from_exact_runtime(&deployment, &runtime).unwrap_err();
+        assert!(matches!(error, Error::AmbiguousRuntimeMatch(2)));
     }
 }
